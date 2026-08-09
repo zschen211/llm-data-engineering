@@ -7,7 +7,9 @@ LLaVA 多模态指令数据工厂：把多模态资产（通用/文档/图表图
 ## 安装与运行
 
 ```bash
-uv sync --extra dev
+uv sync --extra dev               # 基础 + 测试（本地存储后端）
+uv sync --extra dev --extra rustfs --extra hf   # + RustFS(S3) 后端与 HF 下载器
+uv sync --extra web               # + Web 管理界面
 uv run pytest
 
 # 1. 从图片目录构建均衡资产池（按文件名 doc_*/chart_* 启发式分类，可用 --labels 指定）
@@ -28,6 +30,37 @@ uv run llava-instruct render samples_qa.jsonl --image-root ./images --out-dir re
 uv run llava-instruct split samples_qa.jsonl --out-dir deliver
 ```
 
+## 数据资产层（`asset` 命令族）
+
+资产层围绕两个关键元信息设计：**数据源**（资源的元信息 + 互联网下载源）与**存储位置**（下载后的存储后端与对象键）。元数据存 SQLite（版本/标签/来源权威），多模态 blob 存 **RustFS**（S3 兼容对象存储，内容寻址去重）。详细设计见 [docs/asset_layer_spec.md](docs/asset_layer_spec.md)。
+
+### 启动 RustFS（可选，默认本地存储）
+
+```bash
+docker compose up -d          # S3 API:9000 / console:9001（rustfsadmin/rustfsadmin）
+export RUSTFS_ENDPOINT=http://localhost:9000
+export RUSTFS_ACCESS_KEY=rustfsadmin RUSTFS_SECRET_KEY=rustfsadmin
+uv run python scripts/rustfs_smoke.py    # 真实后端集成冒烟测试
+```
+
+不设置 `RUSTFS_ENDPOINT` 时自动使用本地磁盘后端（`data/blobs/`）。
+
+### 常用命令
+
+```bash
+uv run llava-instruct asset init                                  # 查看/校验配置
+uv run llava-instruct asset source add --name coco --kind http --url https://... \
+  --params '{"urls": [{"name": "a.png", "url": "https://x/a.png", "sha256": "..."}]}'
+uv run llava-instruct asset source list
+uv run llava-instruct asset sync <source_id>                      # 下载 + sha256 校验 + 入库（断点可重试）
+uv run llava-instruct asset import ./images --out assets.jsonl    # 本地导入（等效 prepare-assets）
+uv run llava-instruct asset ls --tag task=chart --type chart_image
+uv run llava-instruct asset tag add <asset_id> chart --group task
+uv run llava-instruct asset version snapshot --name v1            # 集合级快照（可复现）
+uv run llava-instruct asset materialize ./pool --tag task=chart   # 物化到本地供下游流水线
+uv run llava-instruct asset serve --port 8000                     # Web 管理界面（需 --extra web）
+```
+
 ## 样本 schema
 
 每条样本包含：`id`、`image`（单图或多图列表）、`asset_type`（general/document/chart/interleaved_pair）、`task_type`（8 类任务）、`source_id`、`bbox`、`ocr_text`、`conversations`（LLaVA 对话格式）、`split`、`meta`（版本/生成方式/审核状态）。
@@ -37,14 +70,27 @@ uv run llava-instruct split samples_qa.jsonl --out-dir deliver
 ```
 llava-instruct/
 ├── pyproject.toml
+├── docker-compose.yml       # RustFS 对象存储服务
+├── docs/
+│   ├── asset_layer_spec.md  # 资产层系统规格
+│   ├── background.md        # VLM/多模态指令数据背景
+│   └── project_goals_and_acceptance.md
+├── scripts/rustfs_smoke.py  # RustFS 集成冒烟测试
 ├── src/llava_instruct/
-│   ├── schema.py      # 样本契约、bbox 校验与 clamp
-│   ├── assets.py      # 资产池：扫描、分类、均衡采样
-│   ├── templates.py   # 受控任务模板与 LLaVA conversation 构建
-│   ├── generator.py   # 监督构造：资产 + 证据 -> 样本
-│   ├── qa.py          # 结构/语义/bbox 三类质检与低质量样本沉淀
-│   ├── render.py      # bbox 反向渲染（Pillow）
-│   ├── split.py       # train/val/smoke 切分、manifest、报告
-│   └── cli.py         # 命令入口
+│   ├── schema.py            # 样本契约、bbox 校验与 clamp
+│   ├── assets/              # 数据资产层
+│   │   ├── classify.py      # 旧资产池函数（扫描/分类/均衡，兼容保留）
+│   │   ├── db.py            # SQLite 元数据（八表：sources/assets/versions/tags/downloads/snapshots）
+│   │   ├── storage.py       # StorageBackend：LocalStorage / S3Storage(RustFS)
+│   │   ├── registry.py      # 下载器注册表
+│   │   ├── downloaders/     # local / http / huggingface 下载器
+│   │   ├── store.py         # AssetStore 门面（sync 状态机/标签/版本/快照/物化）
+│   │   └── web.py           # FastAPI 管理界面
+│   ├── templates.py         # 受控任务模板与 LLaVA conversation 构建
+│   ├── generator.py         # 监督构造：资产 + 证据 -> 样本
+│   ├── qa.py                # 结构/语义/bbox 三类质检与低质量样本沉淀
+│   ├── render.py            # bbox 反向渲染（Pillow）
+│   ├── split.py             # train/val/smoke 切分、manifest、报告
+│   └── cli.py               # 命令入口
 └── tests/
 ```
