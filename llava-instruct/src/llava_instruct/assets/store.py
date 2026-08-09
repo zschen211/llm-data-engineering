@@ -1,11 +1,22 @@
 """AssetStore: the unified facade of the asset layer.
 
-Orchestrates DataSource -> Downloader -> StorageLocation -> metadata index,
-and exposes versioning, tagging, snapshots and pool export.
+This is the single programmatic entry point for other modules — CLI, Web UI
+and any downstream data-processing module should only ever talk to
+``AssetStore`` (or the ``open_store`` factory) and never to Database or
+StorageBackend internals directly.
+
+Typical usage from another module::
+
+    from llava_instruct.assets.api import open_store
+
+    with open_store(data_dir="data") as store:      # env-configured backend
+        report = store.import_dir(Path("./images"))
+        assets = store.list_assets(tags=["task=chart"])
 """
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -14,6 +25,38 @@ from .db import Database, new_id, utcnow
 from .models import Asset, Source
 from .registry import get_downloader
 from .storage import StorageBackend
+
+DEFAULT_DATA_DIR = Path(os.environ.get("LLAVA_DATA_DIR", "data"))
+
+
+def open_store(data_dir: Path | None = None, backend: StorageBackend | None = None) -> "AssetStore":
+    """Build an AssetStore from configuration (env or explicit backend).
+
+    Backend resolution: an explicit ``backend`` wins; otherwise
+    ``RUSTFS_ENDPOINT`` (+ access/secret/bucket) selects the RustFS/S3 backend,
+    and the local content-addressed directory is the fallback.
+    """
+    data_dir = Path(data_dir or DEFAULT_DATA_DIR)
+    if backend is None:
+        endpoint = os.environ.get("RUSTFS_ENDPOINT")
+        if endpoint:
+            if not (os.environ.get("RUSTFS_ACCESS_KEY") and os.environ.get("RUSTFS_SECRET_KEY")):
+                raise ValueError(
+                    "RUSTFS_ENDPOINT is set but RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY are missing"
+                )
+            from .storage import S3StorageBackend
+
+            backend = S3StorageBackend(
+                endpoint,
+                os.environ["RUSTFS_ACCESS_KEY"],
+                os.environ["RUSTFS_SECRET_KEY"],
+                os.environ.get("RUSTFS_BUCKET", "llava-assets"),
+            )
+        else:
+            from .storage import LocalStorageBackend
+
+            backend = LocalStorageBackend(data_dir / "blobs")
+    return AssetStore(data_dir / "assets.db", backend, tmp_dir=data_dir / "tmp")
 
 
 @dataclass
@@ -29,13 +72,13 @@ class SyncReport:
 
 class AssetStore:
     def __init__(self, db_path: Path, backend: StorageBackend, tmp_dir: Path | None = None):
-        self.db = Database(db_path)
+        self._db = Database(db_path)
         self.backend = backend
         self.tmp_dir = Path(tmp_dir or Path(db_path).parent / "tmp")
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
 
     def close(self) -> None:
-        self.db.close()
+        self._db.close()
 
     def __enter__(self) -> "AssetStore":
         return self
@@ -46,26 +89,29 @@ class AssetStore:
     # ------------------------------------------------------------- sources
     def add_source(self, name: str, kind: str, url: str = "", license: str = "",
                    description: str = "", params: dict | None = None) -> Source:
-        return self.db.add_source(name, kind, url=url, license=license,
+        return self._db.add_source(name, kind, url=url, license=license,
                                   description=description, params=params)
 
     def list_sources(self) -> list[Source]:
-        return self.db.list_sources()
+        return self._db.list_sources()
 
     def get_source(self, source_id: str) -> Source | None:
-        return self.db.get_source(source_id)
+        return self._db.get_source(source_id)
+
+    def get_source_by_name(self, name: str) -> Source | None:
+        return self._db.get_source_by_name(name)
 
     def update_source(self, source_id: str, **fields) -> Source | None:
-        return self.db.update_source(source_id, **fields)
+        return self._db.update_source(source_id, **fields)
 
     def delete_source(self, source_id: str) -> None:
-        for asset in self.db.list_assets(source_id=source_id):
-            self.db.delete_asset(asset.id)
-        self.db.delete_source(source_id)
+        for asset in self._db.list_assets(source_id=source_id):
+            self._db.delete_asset(asset.id)
+        self._db.delete_source(source_id)
 
     # --------------------------------------------------------------- sync
     def sync_source(self, source_id: str) -> SyncReport:
-        source = self.db.get_source(source_id)
+        source = self._db.get_source(source_id)
         if source is None:
             raise ValueError(f"unknown source: {source_id}")
         if not source.enabled:
@@ -79,25 +125,25 @@ class AssetStore:
             try:
                 result = downloader.download(remote, target)
                 key = self.backend.put_file(target, result.sha256, result.ext)
-                existing = self.db.get_asset_by_sha256(result.sha256)
+                existing = self._db.get_asset_by_sha256(result.sha256)
                 if existing is not None:
                     report.skipped_existing += 1
-                    self.db.record_download(existing.id, source.kind, "done")
+                    self._db.record_download(existing.id, source.kind, "done")
                     continue
                 asset_id = new_id("ast_")
-                self.db.add_asset(
+                self._db.add_asset(
                     asset_id=asset_id, source_id=source.id, name=remote.name,
                     asset_type=result.meta.get("asset_type", ""),
                     object_key=key, sha256=result.sha256, size=result.size,
                     width=result.width, height=result.height, status="ready",
                     meta={"downloader": source.kind, "remote": remote.meta},
                 )
-                self.db.record_download(asset_id, source.kind, "done")
+                self._db.record_download(asset_id, source.kind, "done")
                 report.new += 1
             except Exception as exc:
                 report.failed += 1
                 report.errors.append(f"{remote.name}: {exc}")
-                self.db.record_download(remote.id, source.kind, "failed", str(exc))
+                self._db.record_download(remote.id, source.kind, "failed", str(exc))
             finally:
                 if target.exists():
                     target.unlink()
@@ -110,62 +156,75 @@ class AssetStore:
         if not path.is_dir():
             raise ValueError(f"not a directory: {path}")
         name = source_name or f"local:{path.resolve()}"
-        source = self.db.get_source_by_name(name)
+        source = self._db.get_source_by_name(name)
         if source is None:
-            source = self.db.add_source(name=name, kind="local", url=str(path),
+            source = self._db.add_source(name=name, kind="local", url=str(path),
                                         params={"labels": labels or {}})
         else:
-            self.db.update_source(source.id, url=str(path), params={"labels": labels or {}})
+            self._db.update_source(source.id, url=str(path), params={"labels": labels or {}})
         return self.sync_source(source.id)
 
     # --------------------------------------------------------------- assets
     def list_assets(self, asset_type: str | None = None, status: str | None = None,
                     source_id: str | None = None, tags: list[str] | None = None) -> list[Asset]:
-        return self.db.list_assets(asset_type=asset_type, status=status,
+        return self._db.list_assets(asset_type=asset_type, status=status,
                                    source_id=source_id, tags=tags)
 
     def get_asset(self, asset_id: str) -> Asset | None:
-        asset = self.db.get_asset(asset_id)
+        asset = self._db.get_asset(asset_id)
         if asset is not None:
-            asset.tags = self.db.asset_tags(asset_id)
+            asset.tags = self._db.asset_tags(asset_id)
         return asset
 
     def delete_asset(self, asset_id: str) -> None:
-        self.db.delete_asset(asset_id)
+        self._db.delete_asset(asset_id)
+
+    def count_assets(self, source_id: str | None = None) -> int:
+        return self._db.count_assets(source_id=source_id)
+
+    def asset_tags(self, asset_id: str) -> list[tuple[str, str]]:
+        return self._db.asset_tags(asset_id)
+
+    def list_downloads(self, limit: int = 100) -> list[dict]:
+        return self._db.list_downloads(limit=limit)
 
     # ---------------------------------------------------------------- tags
     def tag_asset(self, asset_id: str, name: str, group: str = "default") -> None:
-        if self.db.get_asset(asset_id) is None:
+        if self._db.get_asset(asset_id) is None:
             raise ValueError(f"unknown asset: {asset_id}")
-        self.db.tag_asset(asset_id, name, group)
+        self._db.tag_asset(asset_id, name, group)
 
     def untag_asset(self, asset_id: str, name: str) -> None:
-        self.db.untag_asset(asset_id, name)
+        self._db.untag_asset(asset_id, name)
 
     def list_tags(self, group: str | None = None) -> list[dict]:
-        return [asdict(tag) for tag in self.db.list_tags(group)]
+        return [asdict(tag) for tag in self._db.list_tags(group)]
 
     # ------------------------------------------------------------- versions
+    def bump_version(self, asset_id: str, sha256: str, object_key: str,
+                     change_note: str) -> None:
+        self._db.bump_version(asset_id, sha256, object_key, change_note)
+
     def version_history(self, asset_id: str) -> list[dict]:
-        return [asdict(v) for v in self.db.version_history(asset_id)]
+        return [asdict(v) for v in self._db.version_history(asset_id)]
 
     def rollback(self, asset_id: str, version: int) -> Asset | None:
-        asset = self.db.rollback(asset_id, version)
+        asset = self._db.rollback(asset_id, version)
         if asset is not None:
-            asset.tags = self.db.asset_tags(asset_id)
+            asset.tags = self._db.asset_tags(asset_id)
         return asset
 
     # ------------------------------------------------------------ snapshots
     def create_snapshot(self, name: str = "") -> dict:
-        assets = self.db.list_assets(status="ready")
-        snapshot = self.db.create_snapshot(assets, name=name)
+        assets = self._db.list_assets(status="ready")
+        snapshot = self._db.create_snapshot(assets, name=name)
         return asdict(snapshot)
 
     def list_snapshots(self) -> list[dict]:
-        return [asdict(s) for s in self.db.list_snapshots()]
+        return [asdict(s) for s in self._db.list_snapshots()]
 
     def snapshot_assets(self, snapshot_id: str) -> list[Asset]:
-        return self.db.snapshot_assets(snapshot_id)
+        return self._db.snapshot_assets(snapshot_id)
 
     # ------------------------------------------------------------- materialize
     def materialize(self, out_dir: Path, tags: list[str] | None = None,
@@ -174,7 +233,7 @@ class AssetStore:
         generate/qa/render pipeline) and return asset records with local paths."""
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        assets = self.db.list_assets(status="ready", tags=tags, source_id=source_id)
+        assets = self._db.list_assets(status="ready", tags=tags, source_id=source_id)
         records = []
         for asset in assets:
             local = out_dir / asset.name
@@ -191,7 +250,7 @@ class AssetStore:
                     "width": asset.width,
                     "height": asset.height,
                     "source_id": asset.source_id,
-                    "tags": [f"{g}={n}" for g, n in self.db.asset_tags(asset.id)],
+                    "tags": [f"{g}={n}" for g, n in self._db.asset_tags(asset.id)],
                 }
             )
         return records

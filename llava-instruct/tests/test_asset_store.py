@@ -52,7 +52,7 @@ def test_sync_failure_recorded(tmp_path):
         report = store.sync_source(source.id)
         assert report.failed == 1
         assert any("nope.png" in e for e in report.errors)
-        rows = store.db.list_downloads()
+        rows = store.list_downloads()
         assert any(r["status"] == "failed" for r in rows)
 
 
@@ -90,7 +90,7 @@ def test_version_rollback(tmp_path):
     with store:
         store.import_dir(src, source_name="test-local")
         asset = store.list_assets()[0]
-        store.db.bump_version(asset.id, "0" * 64, "blobs/00/000.png", "manual replace")
+        store.bump_version(asset.id, "0" * 64, "blobs/00/000.png", "manual replace")
         history = store.version_history(asset.id)
         assert len(history) == 2
         rolled = store.rollback(asset.id, 1)
@@ -106,7 +106,7 @@ def test_delete_source_cascades(tmp_path):
         source = store.list_sources()[0]
         store.delete_source(source.id)
         assert len(store.list_assets()) == 0
-        assert store.db.count_assets() == 0
+        assert store.count_assets() == 0
 
 
 def test_materialize_missing_object(tmp_path):

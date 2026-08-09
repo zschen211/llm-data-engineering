@@ -65,6 +65,30 @@ uv run llava-instruct asset materialize ./pool --tag task=chart   # 物化到本
 uv run llava-instruct asset serve --port 8000                     # Web 管理界面（需 --extra web）
 ```
 
+## 统一对外 API
+
+其他模块（数据处理流水线、notebook、测试）**只通过 `llava_instruct.assets.api` 访问资产层**，不直接触碰 Database/StorageBackend 内部：
+
+```python
+from llava_instruct.assets.api import open_store
+from pathlib import Path
+
+with open_store() as store:                    # 后端由环境变量决定（RUSTFS_* 或本地）
+    report = store.import_dir(Path("./images"), labels={"a.png": "chart_image"})
+    assets = store.list_assets(tags=["task=chart"], status="ready")
+    store.tag_asset(assets[0].id, "high", group="quality")
+    snapshot = store.create_snapshot(name="v1")     # 集合级快照
+    records = store.materialize(Path("./pool"))     # 物化到本地供下游流水线
+
+# 指定后端（如特定 RustFS 实例）
+from llava_instruct.assets.storage import S3StorageBackend
+backend = S3StorageBackend("http://localhost:9000", "user", "secret", "my-bucket")
+with open_store(backend=backend) as store:
+    ...
+```
+
+`AssetStore` 公开方法一览：`add/list/update/delete_source`、`sync_source`、`import_dir`、`list/get/delete_asset`、`count_assets`、`tag/untag_asset`、`list_tags`、`asset_tags`、`bump_version`、`version_history`、`rollback`、`create/list_snapshot`、`snapshot_assets`、`materialize`、`export_pool`、`list_downloads`。
+
 ## 样本 schema
 
 每条样本包含：`id`、`image`（单图或多图列表）、`asset_type`（general/document/chart/interleaved_pair）、`task_type`（8 类任务）、`source_id`、`bbox`、`ocr_text`、`conversations`（LLaVA 对话格式）、`split`、`meta`（版本/生成方式/审核状态）。

@@ -81,7 +81,7 @@ def main() -> int:
             print("[8] preview stream ok")
 
             store.delete_asset(assets[0].id)
-            print(f"[9] delete ok, remaining: {store.db.count_assets()}")
+            print(f"[9] delete ok, remaining: {store.count_assets()}")
 
     print("\nRustFS smoke test PASSED")
     return 0

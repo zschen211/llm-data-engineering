@@ -214,20 +214,6 @@ def create_app(store: AssetStore) -> FastAPI:
 
 def default_app(data_dir: Path | None = None) -> FastAPI:
     """Build an app wired to the default store (env-configured backend)."""
-    import os
+    from .api import open_store
 
-    from .storage import LocalStorageBackend, S3StorageBackend
-
-    data_dir = Path(data_dir or os.environ.get("LLAVA_DATA_DIR", "data"))
-    endpoint = os.environ.get("RUSTFS_ENDPOINT")
-    if endpoint:
-        backend = S3StorageBackend(
-            endpoint,
-            os.environ["RUSTFS_ACCESS_KEY"],
-            os.environ["RUSTFS_SECRET_KEY"],
-            os.environ.get("RUSTFS_BUCKET", "llava-assets"),
-        )
-    else:
-        backend = LocalStorageBackend(data_dir / "blobs")
-    store = AssetStore(data_dir / "assets.db", backend, tmp_dir=data_dir / "tmp")
-    return create_app(store)
+    return create_app(open_store(data_dir=data_dir))

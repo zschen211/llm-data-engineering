@@ -259,7 +259,45 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 - 仓库根 `docker-compose.yml` 启动 RustFS
 - `scripts/rustfs_smoke.py`：真实走通 上传/下载/去重/预览（需 `RUSTFS_*` 环境变量）
 
-## 12. 后续扩展
+## 12. 统一对外 API（其他模块访问方式）
+
+资产层对外只有两个稳定入口，其他模块一律经此访问，不触碰 `Database` / `StorageBackend` / 下载器内部：
+
+```python
+from llava_instruct.assets.api import open_store
+
+with open_store() as store:                    # 环境变量决定后端（RUSTFS_* 或本地）
+    report = store.import_dir(Path("./images"))  # SyncReport
+    assets = store.list_assets(tags=["task=chart"], status="ready")
+    snapshot = store.create_snapshot(name="v1")
+    records = store.materialize(Path("./pool"))
+
+# 显式指定后端
+with open_store(backend=S3StorageBackend(...)) as store:
+    ...
+```
+
+**`open_store(data_dir=None, backend=None)` 工厂**：
+- `backend` 显式传入优先
+- 否则读 `RUSTFS_ENDPOINT`（+ `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY`/`RUSTFS_BUCKET`）→ S3 后端；缺失凭据抛 `ValueError`
+- 否则本地内容寻址后端（`data/blobs/`）
+- `data_dir` 缺省读 `LLAVA_DATA_DIR`，默认 `data/`
+
+**`AssetStore` 公开方法（稳定契约）**：
+
+| 分组 | 方法 |
+| --- | --- |
+| 数据源 | `add_source / get_source / get_source_by_name / list_sources / update_source / delete_source` |
+| 同步 | `sync_source -> SyncReport`、`import_dir -> SyncReport` |
+| 资产 | `list_assets / get_asset / delete_asset / count_assets / asset_tags / list_downloads` |
+| 标签 | `tag_asset / untag_asset / list_tags` |
+| 版本 | `bump_version / version_history / rollback` |
+| 快照 | `create_snapshot / list_snapshots / snapshot_assets` |
+| 物化 | `materialize / export_pool` |
+
+**内部模块（非公开）**：`db.py`（`Database`）、`storage.py`（`StorageBackend` 实现）、`downloaders/`、`registry.py` —— 仅资产层自身与测试使用，不在稳定 API 范围内。
+
+## 13. 后续扩展
 
 - 下载器：pexels（API key + 分页）、coco（zip + 标注）、webdav 等
 - 存储后端：云 S3/MinIO（S3StorageBackend 已天然兼容）

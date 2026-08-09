@@ -10,31 +10,18 @@ from pathlib import Path
 
 from . import generator, qa as qa_mod, render, split
 from .assets import balance_assets
-from .assets.store import AssetStore
-from .assets.storage import LocalStorageBackend, S3StorageBackend
+from .assets.api import AssetStore, open_store
 from .schema import read_jsonl, write_jsonl
 
 DEFAULT_DATA_DIR = Path(os.environ.get("LLAVA_DATA_DIR", "data"))
 
 
 def default_store(data_dir: Path | None = None) -> AssetStore:
-    """Build the asset store; RustFS backend when RUSTFS_ENDPOINT is set."""
-    data_dir = Path(data_dir or DEFAULT_DATA_DIR)
-    endpoint = os.environ.get("RUSTFS_ENDPOINT")
-    if endpoint:
-        if not (os.environ.get("RUSTFS_ACCESS_KEY") and os.environ.get("RUSTFS_SECRET_KEY")):
-            raise SystemExit(
-                "RUSTFS_ENDPOINT is set but RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY are missing"
-            )
-        backend = S3StorageBackend(
-            endpoint,
-            os.environ["RUSTFS_ACCESS_KEY"],
-            os.environ["RUSTFS_SECRET_KEY"],
-            os.environ.get("RUSTFS_BUCKET", "llava-assets"),
-        )
-    else:
-        backend = LocalStorageBackend(data_dir / "blobs")
-    return AssetStore(data_dir / "assets.db", backend, tmp_dir=data_dir / "tmp")
+    """Build the asset store via the public API; env-driven backend selection."""
+    try:
+        return open_store(data_dir=data_dir)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
 
 
 # ------------------------------------------------------------------ parser
