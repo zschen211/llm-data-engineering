@@ -32,7 +32,7 @@ uv run llava-instruct split samples_qa.jsonl --out-dir deliver
 
 ## 数据资产层（`asset` 命令族）
 
-资产层围绕两个关键元信息设计：**数据源**（资源的元信息 + 互联网下载源）与**存储位置**（下载后的存储后端与对象键）。元数据存 SQLite（版本/标签/来源权威），多模态 blob 存 **RustFS**（S3 兼容对象存储，内容寻址去重）。详细设计见 [docs/asset_layer_spec.md](docs/asset_layer_spec.md)。
+资产层围绕两个关键元信息设计：**数据源**（资源的元信息 + 互联网下载源）与**存储位置**（下载后的存储后端与对象键）。元数据存 SQLite（版本/标签/来源权威），多模态 blob 存 **RustFS**（S3 兼容对象存储，内容寻址去重）。详细设计见 [docs/spec/asset_layer_spec.md](docs/spec/asset_layer_spec.md)，文档索引见 [docs/](docs/README.md)。
 
 ### 启动 RustFS（可选，默认本地存储）
 
@@ -53,10 +53,10 @@ uv run python scripts/rustfs_smoke.py    # 真实后端集成冒烟测试
 
 ```bash
 uv run llava-instruct asset init                                  # 查看/校验配置
-uv run llava-instruct asset source add --name coco --kind http --url https://... \
-  --params '{"urls": [{"name": "a.png", "url": "https://x/a.png", "sha256": "..."}]}'
+uv run llava-instruct asset source add --name coco --kind huggingface \
+  --params '{"repo_id": "org/ds", "process": "parquet"}'     # process=file|parquet
 uv run llava-instruct asset source list
-uv run llava-instruct asset sync <source_id>                      # 下载 + sha256 校验 + 入库（断点可重试）
+uv run llava-instruct asset sync <source_id>                      # 下载管线：并行下载+重试+转换+入库（幂等）
 uv run llava-instruct asset import ./images --out assets.jsonl    # 本地导入（等效 prepare-assets）
 uv run llava-instruct asset ls --tag task=chart --type chart_image
 uv run llava-instruct asset tag add <asset_id> chart --group task
@@ -100,9 +100,10 @@ llava-instruct/
 ├── pyproject.toml
 ├── docker-compose.yml       # RustFS 对象存储服务
 ├── docs/
-│   ├── asset_layer_spec.md  # 资产层系统规格
-│   ├── background.md        # VLM/多模态指令数据背景
-│   └── project_goals_and_acceptance.md
+│   ├── README.md         # 文档索引（spec / background / manual 三目录用途）
+│   ├── spec/             # 系统设计文件
+│   ├── background/       # 项目背景与需求说明
+│   └── manual/           # 操作手册
 ├── scripts/rustfs_smoke.py  # RustFS 集成冒烟测试
 ├── src/llava_instruct/
 │   ├── schema.py            # 样本契约、bbox 校验与 clamp

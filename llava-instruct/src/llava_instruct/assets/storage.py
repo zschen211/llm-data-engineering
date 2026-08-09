@@ -39,6 +39,8 @@ class StorageBackend(ABC):
 class LocalStorageBackend(StorageBackend):
     """Content-addressed directory on the local filesystem."""
 
+    name = "local"
+
     def __init__(self, root: Path):
         self.root = Path(root)
 
@@ -71,6 +73,8 @@ class S3StorageBackend(StorageBackend):
     ``endpoint_url`` may be None for the default AWS endpoint (also used by
     S3 mocks such as moto).
     """
+
+    name = "s3"
 
     def __init__(self, endpoint_url: str | None = None, access_key: str = "",
                  secret_key: str = "", bucket: str = "llava-assets",

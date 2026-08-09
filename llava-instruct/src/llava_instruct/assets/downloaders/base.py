@@ -1,28 +1,38 @@
-"""Downloader base contract and shared helpers."""
+"""Shared contracts and helpers for the download -> process -> persist pipeline.
+
+Pipeline flow (per source):
+  DownloadStage  : resolve remote files, fetch them (retry + parallel workers)
+  Processor      : transform a downloaded file into asset candidates
+                   ("file" = identity; "parquet" = decode rows into images)
+  PersistStage   : hand candidates to the storage backend + metadata index
+"""
 from __future__ import annotations
 
 import hashlib
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..models import Source
-
 
 @dataclass
-class RemoteAsset:
+class RemoteRef:
+    """A file to fetch from a data source (currently a HuggingFace repo)."""
+
     id: str
     name: str
-    url: str = ""
-    expected_sha256: str | None = None
+    path_in_repo: str
     meta: dict = field(default_factory=dict)
 
 
 @dataclass
-class DownloadResult:
+class Candidate:
+    """One asset produced by a Processor, ready for the persist stage."""
+
+    name: str
+    path: str
     sha256: str
     size: int
     ext: str
+    asset_type: str = "general_image"
     width: int | None = None
     height: int | None = None
     meta: dict = field(default_factory=dict)
@@ -50,17 +60,3 @@ def image_size(path: Path) -> tuple[int, int] | None:
 def ext_of(name: str) -> str:
     suffix = Path(name).suffix.lower()
     return suffix or ".bin"
-
-
-class BaseDownloader(ABC):
-    """One downloader per data source kind: enumerate resources, then fetch."""
-
-    kind: str = ""
-
-    @abstractmethod
-    def resolve(self, source: Source) -> list[RemoteAsset]:
-        """Enumerate the resources available on this source."""
-
-    @abstractmethod
-    def download(self, remote: RemoteAsset, target: Path) -> DownloadResult:
-        """Fetch one remote asset to ``target`` and compute its sha256."""

@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据资产管理 - llava-instruct</title>
+<style>
+:root{
+  --blue:#2563eb; --blue-dark:#1d4ed8; --blue-light:#eff6ff; --blue-border:#bfdbfe;
+  --bg:#f1f5f9; --card:#ffffff; --border:#e2e8f0; --text:#0f172a; --muted:#64748b;
+  --ok:#16a34a; --ok-bg:#f0fdf4; --err:#dc2626; --err-bg:#fef2f2; --warn:#d97706;
+  --radius:10px; --shadow:0 1px 3px rgba(15,23,42,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+.topbar{background:#fff;border-bottom:1px solid var(--border);padding:12px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:12px}
+.brand .logo{width:38px;height:38px;border-radius:9px;background:linear-gradient(135deg,#2563eb,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff}
+.brand h1{font-size:17px;font-weight:600}
+.brand p{font-size:12px;color:var(--muted)}
+.top-actions{display:flex;align-items:center;gap:12px}
+#backendInfo{font-size:12px;color:var(--muted);background:var(--blue-light);border:1px solid var(--blue-border);padding:4px 10px;border-radius:999px}
+main{max-width:1200px;margin:0 auto;padding:24px 28px 60px;display:flex;flex-direction:column;gap:20px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow)}
+.stat .num{font-size:24px;font-weight:700;color:var(--blue)}
+.stat .num.ok{color:var(--ok)} .stat .num.bad{color:var(--err)}
+.stat .label{font-size:12px;color:var(--muted);margin-top:2px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
+.card-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.card-head h2{font-size:15px;font-weight:600}
+.card-head .hint{font-size:12px;color:var(--muted)}
+.card-body{padding:16px 18px}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;color:var(--muted);font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:8px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:hover td{background:#f8fafc}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;white-space:nowrap}
+.b-t{background:var(--blue-light);color:var(--blue-dark);border:1px solid var(--blue-border)}
+.b-ok{background:var(--ok-bg);color:var(--ok);border:1px solid #bbf7d0}
+.b-err{background:var(--err-bg);color:var(--err);border:1px solid #fecaca}
+.b-mut{background:#f1f5f9;color:var(--muted);border:1px solid var(--border)}
+.b-warn{background:#fffbeb;color:var(--warn);border:1px solid #fde68a}
+.thumb{width:56px;height:42px;object-fit:cover;border-radius:6px;border:1px solid var(--border);background:#f8fafc}
+.thumb-none{width:56px;height:42px;border-radius:6px;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:10px;background:#f8fafc}
+.tag{display:inline-flex;align-items:center;gap:4px;background:var(--blue-light);color:var(--blue-dark);border:1px solid var(--blue-border);border-radius:999px;padding:1px 8px;font-size:12px;margin:1px}
+.tag button{border:none;background:none;color:var(--blue-dark);cursor:pointer;font-size:12px;line-height:1;padding:0 2px}
+button{cursor:pointer;border-radius:7px;border:1px solid transparent;font-size:13px;padding:6px 12px;transition:.15s}
+.btn-p{background:var(--blue);color:#fff}
+.btn-p:hover{background:var(--blue-dark)}
+.btn-g{background:#fff;border-color:var(--border);color:var(--text)}
+.btn-g:hover{border-color:var(--blue);color:var(--blue)}
+.btn-d{background:#fff;border-color:var(--border);color:var(--err);font-size:12px;padding:3px 8px}
+.btn-d:hover{background:var(--err-bg);border-color:#fecaca}
+.btn-s{font-size:12px;padding:3px 9px}
+input,select{font:inherit;border:1px solid var(--border);border-radius:7px;padding:6px 10px;background:#fff;color:var(--text)}
+input:focus,select:focus{outline:2px solid var(--blue-border);border-color:var(--blue)}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.filters input[type=text]{width:220px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted)}
+.empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
+.srcline{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.form-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.form-row input[type=text]{flex:1;min-width:140px}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;font-size:13px}
+.detail-grid .k{color:var(--muted);font-size:12px}
+.detail-grid .v{word-break:break-all}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:50}
+.modal{background:#fff;border-radius:12px;max-width:720px;width:100%;max-height:82vh;overflow:auto;box-shadow:0 20px 50px rgba(15,23,42,.25)}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:#fff}
+.modal-head h3{font-size:15px}
+.modal-body{padding:18px 20px}
+.hidden{display:none}
+#toasts{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:8px;z-index:100}
+.toast{background:#fff;border-left:4px solid var(--blue);border-radius:8px;box-shadow:0 6px 18px rgba(15,23,42,.15);padding:10px 14px;font-size:13px;min-width:220px;max-width:360px;animation:slide .2s ease}
+.toast.err{border-left-color:var(--err)}
+@keyframes slide{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+a.link{color:var(--blue);text-decoration:none;cursor:pointer}
+a.link:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.5-3.5L11 18"/></svg></div>
+    <div><h1>数据资产管理</h1><p>llava-instruct asset manager</p></div>
+  </div>
+  <div class="top-actions">
+    <span id="backendInfo">-</span>
+    <button class="btn-g" onclick="loadAll()">刷新</button>
+  </div>
+</header>
+<main>
+  <section class="stats">
+    <div class="stat"><div class="num" id="stSources">-</div><div class="label">数据源</div></div>
+    <div class="stat"><div class="num" id="stTotal">-</div><div class="label">资产总数</div></div>
+    <div class="stat"><div class="num ok" id="stReady">-</div><div class="label">已就绪</div></div>
+    <div class="stat"><div class="num bad" id="stFailed">-</div><div class="label">失败</div></div>
+    <div class="stat"><div class="num" id="stSnap">-</div><div class="label">快照</div></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>数据源</h2><span class="hint">定义资源的元信息与下载源，点击同步将下载并登记资产</span></div>
+    <div class="card-body">
+      <table><thead><tr><th>名称</th><th>类型</th><th>URL / 路径</th><th>许可</th><th>状态</th><th style="width:170px">操作</th></tr></thead>
+      <tbody id="sourcesBody"><tr><td colspan="6" class="empty">暂无数据源</td></tr></tbody></table>
+      <div class="form-row">
+        <input id="srcName" type="text" placeholder="名称（必填）">
+        <select id="srcKind"><option value="huggingface">huggingface</option></select>
+        <input id="srcUrl" type="text" placeholder="URL / 本地目录路径">
+        <input id="srcLicense" type="text" placeholder="license">
+        <button class="btn-p" onclick="addSource()">添加数据源</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h2>资产</h2><span class="hint" id="assetCount">-</span></div>
+    <div class="card-body">
+      <div class="filters">
+        <select id="fType"><option value="">全部类型</option><option>general_image</option><option>document_image</option><option>chart_image</option><option>interleaved_pair</option></select>
+        <select id="fStatus"><option value="">全部状态</option><option value="ready">ready</option><option value="pending">pending</option><option value="failed">failed</option></select>
+        <input id="fTag" type="text" placeholder="标签过滤，如 task=chart">
+        <select id="fSource"><option value="">全部数据源</option></select>
+        <input id="fQ" type="text" placeholder="搜索名称 / ID">
+        <button class="btn-g" onclick="loadAssets()">筛选</button>
+      </div>
+      <table><thead><tr><th>预览</th><th>名称</th><th>类型</th><th>状态</th><th>大小</th><th>标签</th><th style="width:200px">操作</th></tr></thead>
+      <tbody id="assetsBody"><tr><td colspan="7" class="empty">暂无资产，请先同步或导入数据源</td></tr></tbody></table>
+    </div>
+  </section>
+
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><h2>集合快照</h2><span class="hint">固定当前资产清单，保证可复现</span></div>
+      <div class="card-body">
+        <div class="form-row">
+          <input id="snapName" type="text" placeholder="快照名称（留空自动生成）">
+          <button class="btn-p" onclick="createSnapshot()">创建快照</button>
+        </div>
+        <div style="margin-top:14px"><table><thead><tr><th>名称</th><th>资产数</th><th>manifest sha1</th><th>创建时间</th></tr></thead>
+        <tbody id="snapBody"><tr><td colspan="4" class="empty">暂无快照</td></tr></tbody></table></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-head"><h2>下载记录</h2><span class="hint">最近 20 条同步任务</span></div>
+      <div class="card-body">
+        <table><thead><tr><th>状态</th><th>下载器</th><th>attempts</th><th>错误</th><th>时间</th></tr></thead>
+        <tbody id="dlBody"><tr><td colspan="5" class="empty">暂无下载记录</td></tr></tbody></table>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modalTitle">资产详情</h3><button class="btn-g" onclick="closeModal()">关闭</button></div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+async function api(path,opts={}){
+  const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});
+  if(!r.ok){
+    let msg='HTTP '+r.status;
+    try{const j=await r.json();msg=j.detail||msg;}catch(e){msg=(await r.text()).slice(0,200)||msg;}
+    throw new Error(msg);
+  }
+  return r.status===204?null:r.json();
+}
+function toast(msg,type='ok'){const d=document.createElement('div');d.className='toast'+(type==='err'?' err':'');d.textContent=msg;$('#toasts').appendChild(d);setTimeout(()=>d.remove(),3500);}
+function esc(s){const d=document.createElement('div');d.textContent=s??'';return d.innerHTML;}
+function fmtSize(n){if(!n)return '-';if(n<1024)return n+'B';if(n<1048576)return (n/1024).toFixed(1)+'KB';return (n/1048576).toFixed(1)+'MB';}
+function statusBadge(s){const m={ready:['b-ok','已就绪'],failed:['b-err','失败'],pending:['b-mut','等待'],downloading:['b-warn','下载中']};const[k,l]=m[s]||['b-mut',s];return `<span class="badge ${k}">${esc(l)}</span>`;}
+function typeBadge(t){const m={general_image:'b-t',document_image:'b-warn',chart_image:'b-ok',interleaved_pair:'b-mut'};return `<span class="badge ${m[t]||'b-mut'}">${esc(t||'-')}</span>`;}
+function tagChips(tags,assetId){return (tags||[]).map(([g,n])=>`<span class="tag">${esc(g)}=${esc(n)}${assetId?`<button title="删除标签" onclick="untagAsset('${assetId}','${esc(n)}')">×</button>`:''}</span>`).join('')||'<span class="mono">-</span>';}
+function thumb(a){return a.object_key?`<img class="thumb" src="/api/assets/${a.id}/preview" onerror="this.parentNode.innerHTML='<div class=thumb-none>无图</div>'">`:'<div class="thumb-none">无图</div>';}
+
+async function loadAll(){await Promise.all([loadInfo(),loadSources(),loadAssets(),loadSnapshots(),loadDownloads()]);}
+
+async function loadInfo(){
+  try{
+    const info=await api('/api/info');
+    $('#backendInfo').textContent=info.backend==='s3'?`后端：RustFS/S3 (${info.bucket})`:`后端：本地存储`;
+    $('#stSources').textContent=info.source_count;
+    $('#stTotal').textContent=info.asset_count;
+    $('#stReady').textContent=info.ready_count;
+    $('#stFailed').textContent=info.failed_count;
+    $('#stSnap').textContent=info.snapshot_count;
+  }catch(e){toast('加载统计失败: '+e.message,'err');}
+}
+
+async function loadSources(){
+  try{
+    const list=await api('/api/sources');
+    const sel=$('#fSource');const cur=sel.value;
+    sel.innerHTML='<option value="">全部数据源</option>'+list.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+    if(cur)sel.value=cur;
+    if(!list.length){$('#sourcesBody').innerHTML='<tr><td colspan="6" class="empty">暂无数据源</td></tr>';return;}
+    $('#sourcesBody').innerHTML=list.map(s=>`<tr>
+      <td>${esc(s.name)}</td><td><span class="badge b-t">${esc(s.kind)}</span></td>
+      <td class="mono" style="word-break:break-all">${esc(s.url||'-')}</td><td>${esc(s.license||'-')}</td>
+      <td>${s.enabled?'<span class="badge b-ok">启用</span>':'<span class="badge b-mut">停用</span>'}</td>
+      <td><button class="btn-g btn-s" onclick="syncSource('${s.id}')">同步</button>
+          <button class="btn-d btn-s" onclick="rmSource('${s.id}')">删除</button></td></tr>`).join('');
+  }catch(e){toast('加载数据源失败: '+e.message,'err');}
+}
+
+async function addSource(){
+  const name=$('#srcName').value.trim();
+  if(!name)return toast('请填写数据源名称','err');
+  try{
+    await api('/api/sources',{method:'POST',body:JSON.stringify({name,kind:$('#srcKind').value,url:$('#srcUrl').value.trim(),license:$('#srcLicense').value.trim()})});
+    toast('数据源已添加');['#srcName','#srcUrl','#srcLicense'].forEach(s=>$(s).value='');
+    await loadAll();
+  }catch(e){toast('添加失败: '+e.message,'err');}
+}
+
+async function syncSource(id){
+  toast('开始同步…');try{
+    const r=await api(`/api/sources/${id}/sync`,{method:'POST'});
+    toast(`同步完成：新增 ${r.new}，跳过 ${r.skipped_existing}，失败 ${r.failed}`);
+    if(r.failed)toast(r.errors.join('; '),'err');
+    await loadAll();
+  }catch(e){toast('同步失败: '+e.message,'err');}
+}
+
+async function rmSource(id){
+  if(!confirm('删除数据源将级联删除其下资产元数据，确认？'))return;
+  try{await api(`/api/sources/${id}`,{method:'DELETE'});toast('数据源已删除');await loadAll();}
+  catch(e){toast('删除失败: '+e.message,'err');}
+}
+
+async function loadAssets(){
+  const q=new URLSearchParams();
+  if($('#fType').value)q.set('type',$('#fType').value);
+  if($('#fStatus').value)q.set('status',$('#fStatus').value);
+  if($('#fTag').value.trim())q.set('tag',$('#fTag').value.trim());
+  if($('#fSource').value)q.set('source',$('#fSource').value);
+  try{
+    let list=await api('/api/assets?'+q);
+    const kw=$('#fQ').value.trim().toLowerCase();
+    if(kw)list=list.filter(a=>a.name.toLowerCase().includes(kw)||a.id.includes(kw));
+    $('#assetCount').textContent=`共 ${list.length} 条`;
+    if(!list.length){$('#assetsBody').innerHTML='<tr><td colspan="7" class="empty">没有符合条件的资产</td></tr>';return;}
+    $('#assetsBody').innerHTML=list.map(a=>`<tr>
+      <td>${thumb(a)}</td>
+      <td><a class="link" onclick="openDetail('${a.id}')">${esc(a.name)}</a><br><span class="mono">${esc(a.id)}</span></td>
+      <td>${typeBadge(a.asset_type)}</td><td>${statusBadge(a.status)}</td>
+      <td>${fmtSize(a.size)}</td>
+      <td>${tagChips(a.tags,'${a.id}')}</td>
+      <td>
+        <input id="tg${a.id}" placeholder="标签名" style="width:86px;padding:3px 6px">
+        <button class="btn-g btn-s" onclick="tagAsset('${a.id}')">打标</button>
+        <button class="btn-d btn-s" onclick="rmAsset('${a.id}')">删除</button>
+      </td></tr>`).join('');
+  }catch(e){toast('加载资产失败: '+e.message,'err');}
+}
+
+async function tagAsset(id){
+  const name=$('#tg'+id).value.trim();if(!name)return;
+  try{await api(`/api/assets/${id}/tags`,{method:'POST',body:JSON.stringify({name})});toast('已打标');loadAssets();}
+  catch(e){toast('打标失败: '+e.message,'err');}
+}
+async function untagAsset(id,name){
+  try{await api(`/api/assets/${id}/tags/${encodeURIComponent(name)}`,{method:'DELETE'});toast('已删除标签');loadAssets();}
+  catch(e){toast('删除标签失败: '+e.message,'err');}
+}
+async function rmAsset(id){
+  if(!confirm('确认删除该资产？'))return;
+  try{await api(`/api/assets/${id}`,{method:'DELETE'});toast('资产已删除');loadAll();}
+  catch(e){toast('删除失败: '+e.message,'err');}
+}
+
+async function openDetail(id){
+  try{
+    const a=await api('/api/assets/'+id);
+    const cur=a.current_version;
+    $('#modalTitle').textContent=`资产详情 · ${a.name}`;
+    $('#modalBody').innerHTML=`
+      <div class="detail-grid" style="margin-bottom:16px">
+        <div><div class="k">ID</div><div class="v mono">${esc(a.id)}</div></div>
+        <div><div class="k">数据源</div><div class="v mono">${esc(a.source_id)}</div></div>
+        <div><div class="k">类型 / 状态</div><div class="v">${typeBadge(a.asset_type)} ${statusBadge(a.status)}</div></div>
+        <div><div class="k">尺寸</div><div class="v">${a.width?`${a.width} × ${a.height}`:'-'}</div></div>
+        <div><div class="k">大小</div><div class="v">${fmtSize(a.size)}</div></div>
+        <div><div class="k">对象键</div><div class="v mono">${esc(a.object_key||'-')}</div></div>
+        <div><div class="k">sha256</div><div class="v mono">${esc(a.sha256||'-')}</div></div>
+        <div><div class="k">创建 / 更新</div><div class="v mono">${esc(a.created_at)}<br>${esc(a.updated_at)}</div></div>
+        <div><div class="k">标签</div><div class="v">${tagChips(a.tags,'${a.id}')}</div></div>
+      </div>
+      <h4 style="font-size:13px;margin-bottom:8px">版本历史（当前 v${cur}）</h4>
+      <table><thead><tr><th>版本</th><th>sha256</th><th>变更说明</th><th>时间</th><th></th></tr></thead>
+      <tbody>${(a.versions||[]).map(v=>`<tr>
+        <td>v${v.version}${v.version===cur?' <span class="badge b-ok">当前</span>':''}</td>
+        <td class="mono">${esc(v.sha256.slice(0,16))}…</td><td>${esc(v.change_note||'-')}</td>
+        <td class="mono">${esc(v.created_at)}</td>
+        <td>${v.version!==cur?`<button class="btn-g btn-s" onclick="rollbackAsset('${a.id}',${v.version})">回滚</button>`:''}</td></tr>`).join('')}
+      </tbody></table>`;
+    $('#modal').classList.remove('hidden');
+  }catch(e){toast('加载详情失败: '+e.message,'err');}
+}
+async function rollbackAsset(id,v){
+  if(!confirm(`回滚到 v${v}？`))return;
+  try{await api(`/api/assets/${id}/rollback`,{method:'POST',body:JSON.stringify({version:v})});toast('已回滚');closeModal();loadAssets();}
+  catch(e){toast('回滚失败: '+e.message,'err');}
+}
+function closeModal(){$('#modal').classList.add('hidden');}
+$('#modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
+
+async function loadSnapshots(){
+  try{
+    const list=await api('/api/snapshots');
+    if(!list.length){$('#snapBody').innerHTML='<tr><td colspan="4" class="empty">暂无快照</td></tr>';return;}
+    $('#snapBody').innerHTML=list.map(s=>`<tr><td>${esc(s.id)}</td><td>${s.asset_count}</td>
+      <td class="mono">${esc(s.manifest_sha1.slice(0,16))}…</td><td class="mono">${esc(s.created_at)}</td></tr>`).join('');
+  }catch(e){toast('加载快照失败: '+e.message,'err');}
+}
+async function createSnapshot(){
+  try{
+    const s=await api('/api/snapshots',{method:'POST',body:JSON.stringify({name:$('#snapName').value.trim()})});
+    toast(`快照已创建：${s.id}（${s.asset_count} 资产）`);$('#snapName').value='';loadSnapshots();loadInfo();
+  }catch(e){toast('创建快照失败: '+e.message,'err');}
+}
+
+async function loadDownloads(){
+  try{
+    const list=await api('/api/downloads?limit=20');
+    if(!list.length){$('#dlBody').innerHTML='<tr><td colspan="5" class="empty">暂无下载记录</td></tr>';return;}
+    $('#dlBody').innerHTML=list.map(d=>`<tr>
+      <td>${statusBadge(d.status)}</td><td><span class="badge b-t">${esc(d.downloader)}</span></td>
+      <td>${d.attempts}</td><td class="mono" style="word-break:break-all">${esc(d.error||'-')}</td>
+      <td class="mono">${esc(d.finished_at||d.started_at)}</td></tr>`).join('');
+  }catch(e){toast('加载下载记录失败: '+e.message,'err');}
+}
+
+loadAll();
+</script>
+</body>
+</html>

@@ -18,9 +18,9 @@ def test_asset_init(tmp_path):
 
 
 def test_asset_source_crud(tmp_path):
-    assert main(["asset", "source", "add", "--name", "coco", "--kind", "http",
-                 "--url", "https://cocodataset.org",
-                 "--params", '{"urls": []}', "--data-dir", str(tmp_path / "data")]) == 0
+    assert main(["asset", "source", "add", "--name", "coco", "--kind", "huggingface",
+                 "--url", "https://huggingface.co",
+                 "--params", '{"repo_id": "org/coco"}', "--data-dir", str(tmp_path / "data")]) == 0
     assert main(["asset", "source", "list", "--data-dir", str(tmp_path / "data")]) == 0
 
 

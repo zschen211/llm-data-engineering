@@ -26,7 +26,33 @@ def client(tmp_path):
 def test_index_page(client):
     response = client.get("/")
     assert response.status_code == 200
-    assert "资产管理" in response.text
+    assert "数据资产管理" in response.text
+    assert "llava-instruct asset manager" in response.text
+
+
+def test_info_endpoint(client):
+    response = client.get("/api/info")
+    assert response.status_code == 200
+    info = response.json()
+    assert info["backend"] == "local"
+    assert info["asset_count"] == 2
+    assert info["ready_count"] == 2
+    assert info["failed_count"] == 0
+
+
+def test_downloads_endpoint(client):
+    response = client.get("/api/downloads?limit=10")
+    assert response.status_code == 200
+    records = response.json()
+    assert len(records) == 2
+    assert all(r["status"] == "done" for r in records)
+
+
+def test_rollback_endpoint(client):
+    asset = client.get("/api/assets").json()[0]
+    client.post(f"/api/assets/{asset['id']}/rollback", json={"version": 1})
+    detail = client.get(f"/api/assets/{asset['id']}").json()
+    assert detail["current_version"] == 1
 
 
 def test_sources_api(client):
@@ -34,10 +60,10 @@ def test_sources_api(client):
     assert response.status_code == 200
     assert response.json()[0]["kind"] == "local"
 
-    response = client.post("/api/sources", json={"name": "http-src", "kind": "http", "url": "https://x"})
+    response = client.post("/api/sources", json={"name": "hf-src", "kind": "huggingface", "url": "https://hf.co", "params": {"repo_id": "org/ds"}})
     assert response.status_code == 201
     source_id = response.json()["id"]
-    assert client.put(f"/api/sources/{source_id}", json={"name": "http-src2", "kind": "http"}).status_code == 200
+    assert client.put(f"/api/sources/{source_id}", json={"name": "hf-src2", "kind": "huggingface"}).status_code == 200
     assert client.delete(f"/api/sources/{source_id}").status_code == 204
 
 
@@ -59,11 +85,14 @@ def test_assets_api_filter_and_tag(client):
     assert "versions" in detail and len(detail["versions"]) == 1
 
 
-def test_sync_trigger_and_preview(client):
+def test_sync_rejects_local_import_source(client):
+    """Import sources (kind=local) are store-level only; sync requires huggingface."""
     source = client.get("/api/sources").json()[0]
-    report = client.post(f"/api/sources/{source['id']}/sync").json()
-    assert report["skipped_existing"] == 2
+    response = client.post(f"/api/sources/{source['id']}/sync")
+    assert response.status_code == 400
 
+
+def test_preview(client):
     asset = client.get("/api/assets").json()[0]
     response = client.get(f"/api/assets/{asset['id']}/preview")
     assert response.status_code == 200

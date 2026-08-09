@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from . import downloaders as _downloaders  # noqa: F401  (populate registry)
+from . import downloaders as _downloaders  # noqa: F401  (registers processors)
 from .db import Database, new_id, utcnow
 from .models import Asset, Source
-from .registry import get_downloader
 from .storage import StorageBackend
 
 DEFAULT_DATA_DIR = Path(os.environ.get("LLAVA_DATA_DIR", "data"))
@@ -80,6 +80,10 @@ class AssetStore:
     def close(self) -> None:
         self._db.close()
 
+    @property
+    def backend_name(self) -> str:
+        return getattr(self.backend, "name", type(self.backend).__name__)
+
     def __enter__(self) -> "AssetStore":
         return self
 
@@ -111,47 +115,69 @@ class AssetStore:
 
     # --------------------------------------------------------------- sync
     def sync_source(self, source_id: str) -> SyncReport:
+        """Run the download -> process -> persist pipeline for one source.
+
+        Only the ``huggingface`` source kind is supported; the data format
+        transformation is chosen by ``params.process`` ("file" | "parquet").
+        """
         source = self._db.get_source(source_id)
         if source is None:
             raise ValueError(f"unknown source: {source_id}")
         if not source.enabled:
             raise ValueError(f"source {source_id} is disabled")
-        downloader = get_downloader(source.kind)
-        remotes = downloader.resolve(source)
+        if source.kind != "huggingface":
+            raise ValueError(f"only the 'huggingface' source kind is supported, got {source.kind!r}")
+
+        from .downloaders.download import DownloadStage
+        from .downloaders.persist import PersistStage
+        from .downloaders.process import get_processor
+
+        stage = DownloadStage.from_source(source)
+        remotes = stage.resolve()
         report = SyncReport(source_id=source.id, source_kind=source.kind,
                             resolved=len(remotes))
+        processor = get_processor(source.params.get("process", "file"), source.params)
+        persister = PersistStage(self.backend, self._db)
+
+        downloaded, errors = stage.fetch_all(
+            remotes, self.tmp_dir, workers=int(source.params.get("workers", 2))
+        )
         for remote in remotes:
-            target = self.tmp_dir / f"{remote.id}.part"
+            local = downloaded.get(remote.id)
+            if local is None:
+                message = errors.get(remote.id, "download failed")
+                report.failed += 1
+                report.errors.append(f"{remote.name}: {message}")
+                self._db.record_download(remote.id, source.kind, "failed", message)
+                continue
+            work_dir = local.parent
             try:
-                result = downloader.download(remote, target)
-                key = self.backend.put_file(target, result.sha256, result.ext)
-                existing = self._db.get_asset_by_sha256(result.sha256)
-                if existing is not None:
-                    report.skipped_existing += 1
-                    self._db.record_download(existing.id, source.kind, "done")
-                    continue
-                asset_id = new_id("ast_")
-                self._db.add_asset(
-                    asset_id=asset_id, source_id=source.id, name=remote.name,
-                    asset_type=result.meta.get("asset_type", ""),
-                    object_key=key, sha256=result.sha256, size=result.size,
-                    width=result.width, height=result.height, status="ready",
-                    meta={"downloader": source.kind, "remote": remote.meta},
-                )
-                self._db.record_download(asset_id, source.kind, "done")
-                report.new += 1
+                candidates = processor.process(remote, local, work_dir)
+                new, skipped, errors_in_persist = persister.persist(source, candidates)
+                report.new += new
+                report.skipped_existing += skipped
+                for error in errors_in_persist:
+                    report.failed += 1
+                    report.errors.append(f"{remote.name}: {error}")
             except Exception as exc:
                 report.failed += 1
                 report.errors.append(f"{remote.name}: {exc}")
                 self._db.record_download(remote.id, source.kind, "failed", str(exc))
             finally:
-                if target.exists():
-                    target.unlink()
+                shutil.rmtree(work_dir, ignore_errors=True)
         return report
 
     def import_dir(self, path: Path, labels: dict[str, str] | None = None,
                    source_name: str | None = None) -> SyncReport:
-        """Import a local image directory; idempotent per source name."""
+        """Import a local image directory; idempotent per source name.
+
+        Local import is a store-level convenience (no network pipeline): files
+        are scanned, classified and handed straight to the persist stage.
+        """
+        from .classify import IMAGE_SUFFIXES, classify_image
+        from .downloaders.base import Candidate, image_size, sha256_of
+        from .downloaders.persist import PersistStage
+
         path = Path(path)
         if not path.is_dir():
             raise ValueError(f"not a directory: {path}")
@@ -159,10 +185,39 @@ class AssetStore:
         source = self._db.get_source_by_name(name)
         if source is None:
             source = self._db.add_source(name=name, kind="local", url=str(path),
-                                        params={"labels": labels or {}})
+                                         params={"labels": labels or {}})
         else:
             self._db.update_source(source.id, url=str(path), params={"labels": labels or {}})
-        return self.sync_source(source.id)
+
+        persister = PersistStage(self.backend, self._db)
+        report = SyncReport(source_id=source.id, source_kind="local")
+        for file_path in sorted(path.iterdir()):
+            if not (file_path.is_file() and file_path.suffix.lower() in IMAGE_SUFFIXES):
+                continue
+            report.resolved += 1
+            width, height = image_size(file_path) or (None, None)
+            candidate = Candidate(
+                name=file_path.name,
+                path=str(file_path),
+                sha256=sha256_of(file_path),
+                size=file_path.stat().st_size,
+                ext=file_path.suffix.lower() or ".bin",
+                asset_type=classify_image(file_path, labels),
+                width=width,
+                height=height,
+                meta={"labels": (labels or {}).get(file_path.name, {})},
+            )
+            try:
+                outcome = persister.persist_one(source, candidate)
+                if outcome == "new":
+                    report.new += 1
+                else:
+                    report.skipped_existing += 1
+            except Exception as exc:
+                report.failed += 1
+                report.errors.append(f"{file_path.name}: {exc}")
+                self._db.record_download(file_path.name, source.kind, "failed", str(exc))
+        return report
 
     # --------------------------------------------------------------- assets
     def list_assets(self, asset_type: str | None = None, status: str | None = None,

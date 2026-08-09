@@ -149,42 +149,57 @@ snapshot_assets (snapshot_id TEXT REFERENCES snapshots(id),
 - 组合筛选：`asset ls --tag task=chart --tag quality=high` → 按 group=name 匹配
 - 筛选结果可导出为资产池 JSONL（供 generate 阶段消费）
 
-## 7. 下载抽象
+## 7. 下载管线（download → process → persist）
+
+下载被拆成三段管线，职责严格分离；当前仅支持 `huggingface` 数据源（kind），数据格式转换由 `params.process` 选择：
+
+```
+DownloadStage ──► Processor ──► PersistStage
+  resolve 文件清单    下载文件→资产候选      候选→存储层+元数据索引
+  并行下载(workers)   "file"=原样         内容寻址去重(sha256)
+  重试(attempts)      "parquet"=逐行解码   登记 assets + downloads
+```
+
+**数据契约**：
 
 ```python
 @dataclass
-class RemoteAsset:
-    id: str; name: str; url: str = ""; expected_sha256: str | None = None; meta: dict
+class RemoteRef:     # download 的输出/process 的输入
+    id: str; name: str; path_in_repo: str; meta: dict
 
 @dataclass
-class DownloadResult:
-    sha256: str; size: int; ext: str; width: int | None; height: int | None; meta: dict
-
-class BaseDownloader(ABC):
-    kind: str
-    @abstractmethod
-    def resolve(self, source) -> list[RemoteAsset]     # 枚举该源下资源
-    @abstractmethod
-    def download(self, remote, target: Path) -> DownloadResult   # 拉取 + 计算 sha256
+class Candidate:     # process 的输出/persist 的输入
+    name: str; path: str; sha256: str; size: int; ext: str
+    asset_type: str; width: int|None; height: int|None; meta: dict
 ```
 
-注册表：`@register(kind)` 装饰器 + `get_downloader(kind)` 工厂。新增数据源 = 实现一个类 + 注册，零改动上层。
+**DownloadStage**（`downloaders/download.py`，网络密集型，仅 HF）：
+- `resolve()`：枚举仓库文件（`subfolder`/`allow_patterns`/`ignore_patterns` 过滤）
+- `download()`：单文件拉取，指数退避重试（`attempts`，默认 3）
+- `fetch_all()`：跨文件并行下载（`workers`，默认 2）
+- 依赖 `hf` extra（huggingface_hub）
 
-| kind | 实现 | resolve 输入 | 说明 |
-| --- | --- | --- | --- |
-| `local` | LocalImportDownloader | 目录扫描 | 本地导入，按文件名启发式分类 |
-| `http` | HttpDownloader | params.urls 列表 | HTTP Range 断点续传 + 重试 + sha256 校验 |
-| `huggingface` | HfDownloader | params.repo_id 等 | huggingface_hub（`hf` extra） |
-| `pexels` / `coco` | 预留 | — | 后续按需实现 |
+**Processor**（`downloaders/process.py` + `processors/`，按 `params.process` 注册表选择）：
+
+| name | 实现 | 转换逻辑 |
+| --- | --- | --- |
+| `file`（默认） | FileProcessor | 下载文件即资产（identity），`asset_type` 参数或文件名启发式分类 |
+| `parquet` | ParquetProcessor | 逐行解码 parquet 中的图片（HF Image 特征，流式批量读取），坏行跳过，处理后删除 parquet 释放磁盘；依赖 `parquet` extra（pyarrow） |
+
+**PersistStage**（`downloaders/persist.py`，唯一触碰存储层的阶段）：
+- `persist_one()`：`backend.put_file`（内容寻址去重）→ sha256 查重 → 登记 `assets`（version=1）+ `downloads`，返回 `new`/`skipped`
+- `persist()`：批量执行并收集单候选错误（不拖垮整批）
+
+**本地目录导入**（`store.import_dir`）不走网络管线：直接扫描目录 → 分类 → 构造 Candidate → 交给 PersistStage，作为 store 级便捷 API 保留。
 
 ### sync 流程（状态机）
 
 ```
-resolve → 逐个下载到 data/tmp/<id>.part
-        → sha256 校验（不匹配则 failed + 记录 error，可重试）
-        → backend.put_file（已存在同 sha256 → 跳过上传，去重）
-        → 登记 assets（status=ready，version=1；已存在则跳过）
-        → 清理临时文件
+resolve（列文件清单）
+  → fetch_all（并行下载到 data/tmp/<remote_id>/, 失败重试）
+  → processor.process（file=原样 / parquet=逐行解码为候选）
+  → persister.persist（put_file 去重 → 登记；已存在同 sha256 → skipped）
+  → 清理临时目录
 ```
 
 全程写入 `downloads` 表（status/attempts/error），Web UI 可见失败原因与重试入口。
