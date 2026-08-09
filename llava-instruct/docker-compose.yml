@@ -2,9 +2,13 @@
 # Usage: docker compose up -d
 #   S3 API  : http://localhost:9000  (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY)
 #   Console : http://localhost:9001  (rustfsadmin / rustfsadmin)
+#
+# Image mirrors: Docker Hub (registry-1.docker.io) may be unreachable in some
+# regions; default to the DaoCloud mirror. Override with:
+#   RUSTFS_IMAGE=rustfs/rustfs:latest docker compose up -d
 services:
   rustfs:
-    image: rustfs/rustfs:latest
+    image: ${RUSTFS_IMAGE:-docker.m.daocloud.io/rustfs/rustfs:latest}
     container_name: rustfs-server
     ports:
       - "9000:9000" # S3 API port
@@ -19,6 +23,9 @@ services:
       - RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY:-rustfsadmin}   # CHANGEME for production
       - RUSTFS_OBS_LOGGER_LEVEL=info
       - RUSTFS_OBS_LOG_DIRECTORY=/app/logs
+      # single-machine dev: the four named volumes share one physical disk,
+      # so bypass the distinct-disk check (local testing / CI only)
+      - RUSTFS_UNSAFE_BYPASS_DISK_CHECK=${RUSTFS_UNSAFE_BYPASS_DISK_CHECK:-true}
     volumes:
       - rustfs_data_0:/data/rustfs0
       - rustfs_data_1:/data/rustfs1
@@ -34,7 +41,7 @@ services:
       start_period: 40s
 
   volume-permission-helper:
-    image: alpine
+    image: ${ALPINE_IMAGE:-docker.m.daocloud.io/library/alpine:latest}
     volumes:
       - rustfs_data_0:/data0
       - rustfs_data_1:/data1

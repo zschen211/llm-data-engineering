@@ -43,6 +43,10 @@ export RUSTFS_ACCESS_KEY=rustfsadmin RUSTFS_SECRET_KEY=rustfsadmin
 uv run python scripts/rustfs_smoke.py    # 真实后端集成冒烟测试
 ```
 
+> 镜像默认走 DaoCloud 国内镜像（`docker.m.daocloud.io`）；如需官方源：
+> `RUSTFS_IMAGE=rustfs/rustfs:latest docker compose up -d`。单机开发默认
+> `RUSTFS_UNSAFE_BYPASS_DISK_CHECK=true`（共享磁盘绕过检查）。
+
 不设置 `RUSTFS_ENDPOINT` 时自动使用本地磁盘后端（`data/blobs/`）。
 
 ### 常用命令
