@@ -4,7 +4,11 @@ import moto
 import pytest
 from PIL import Image
 
-from llava_instruct.assets.storage import LocalStorageBackend, S3StorageBackend, object_key_for
+from llava_instruct.assets.storage import (
+    LocalStorageBackend,
+    S3StorageBackend,
+    object_key_for,
+)
 
 
 @pytest.fixture

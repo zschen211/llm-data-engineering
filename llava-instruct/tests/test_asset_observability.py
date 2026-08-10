@@ -5,6 +5,7 @@ injected via ``hub=`` (picklable instances from ``fakehub``), never by
 monkeypatching. Blocking gates are file-based: a worker polls until the gate
 file appears.
 """
+
 import io
 import logging
 import threading
@@ -12,16 +13,15 @@ import time
 from pathlib import Path
 
 import pytest
+from fakehub import CrashingHub, FailingHub, FakeHub
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from fakehub import CrashingHub, FailingHub, FakeHub
-from llava_instruct.assets.downloaders.download import _progress_tqdm_class
+from llava_instruct.assets.api import AssetStore, open_store
+from llava_instruct.assets.routes import create_app
+from llava_instruct.assets.services.downloaders.download import _progress_tqdm_class
 from llava_instruct.assets.storage import LocalStorageBackend
-from llava_instruct.assets.store import AssetStore
-from llava_instruct.assets.web import create_app
 from llava_instruct.log import get_logger, setup_logging
-from llava_instruct.assets.api import open_store
 
 
 def _images(root: Path, n: int = 3):
@@ -151,8 +151,12 @@ def test_sync_pause_halts_between_files_and_resume_continues(tmp_path, ray_runti
     hub = FakeHub(gate_path=str(gate), gated_suffix="c.png")
     with open_store(data_dir=tmp_path / "data") as store:
         source = _add_hf_source(store, workers=3)
-        thread = threading.Thread(target=store.sync_source, args=(source.id,),
-                                  kwargs={"hub": hub}, daemon=True)
+        thread = threading.Thread(
+            target=store.sync_source,
+            args=(source.id,),
+            kwargs={"hub": hub},
+            daemon=True,
+        )
         thread.start()
         try:
             for _ in range(400):  # 等 a/b 两个文件落库（c 被 gate 阻塞）
@@ -174,7 +178,9 @@ def test_sync_pause_halts_between_files_and_resume_continues(tmp_path, ray_runti
             run = store.get_sync_run(run["id"])
             assert run["status"] == "done"
             assert run["done_files"] == 3
-            assert any(ev["stage"] == "control" for ev in store.get_sync_events(run["id"]))
+            assert any(
+                ev["stage"] == "control" for ev in store.get_sync_events(run["id"])
+            )
         finally:
             gate.write_text("")
             thread.join(timeout=60)
@@ -222,26 +228,63 @@ def test_import_dir_records_run(tmp_path):
 def test_tqdm_progress_class_throttled():
 
     events = []
-    cls = _progress_tqdm_class(lambda **kw: events.append(kw), "a.png", min_interval_pct=25)
+    cls = _progress_tqdm_class(
+        lambda **kw: events.append(kw), "a.png", min_interval_pct=25
+    )
     bar = cls(total=100)
-    bar.update(20)   # 20%  no event
-    bar.update(20)   # 40%  event
-    bar.update(5)    # 45%  no event (throttle)
-    bar.update(35)   # 80%  event
-    bar.update(20)   # 100% event (final)
+    bar.update(20)  # 20%  no event
+    bar.update(20)  # 40%  event
+    bar.update(5)  # 45%  no event (throttle)
+    bar.update(35)  # 80%  event
+    bar.update(20)  # 100% event (final)
     assert [round(ev["fraction"], 1) for ev in events] == [0.4, 0.8, 1.0]
     assert all(ev["stage"] == "download" and ev["remote"] == "a.png" for ev in events)
+    assert all("MB/s" in ev["message"] for ev in events)
+
+
+def test_tqdm_progress_without_total_still_reports():
+    """Downloads without a known total (gzip/chunked, Xet streams) must still
+    emit time-throttled byte events instead of going silent."""
+
+    events = []
+    cls = _progress_tqdm_class(
+        lambda **kw: events.append(kw), "a.png", min_interval_sec=0.0
+    )
+    bar = cls(total=None)
+    bar.update(1000)
+    bar.update(2000)
+    bar.update(3000)
+    assert len(events) == 3
+    assert all(ev["fraction"] is None for ev in events)
+    assert all("字节" in ev["message"] for ev in events)
+
+
+def test_download_fraction_survives_ray(tmp_path, ray_runtime):
+    """Per-file download fractions reported by the tqdm callback inside a Ray
+    worker are persisted to sync_events (fraction column) and readable back."""
+    with open_store(data_dir=tmp_path / "data") as store:
+        source = _add_hf_source(store)
+        store.sync_source(source.id, hub=FakeHub())
+        run = store.list_sync_runs()[0]
+        fractions = {
+            round(ev["fraction"], 1)
+            for ev in store.get_sync_events(run["id"])
+            if ev["stage"] == "download" and ev["fraction"] is not None
+        }
+        assert {0.4, 0.8, 1.0} <= fractions
 
 
 def test_sources_api_reports_running_run(tmp_path, ray_runtime):
     """/api/sources exposes running_run_id while a sync is in flight (for the
     "查看进度" entry point), and None once it finishes."""
 
-
     gate = tmp_path / "gate"
-    store = AssetStore(tmp_path / "assets.db", LocalStorageBackend(tmp_path / "blobs"),
-                       tmp_dir=tmp_path / "tmp",
-                       hub=FakeHub(gate_path=str(gate)))
+    store = AssetStore(
+        tmp_path / "assets.db",
+        LocalStorageBackend(tmp_path / "blobs"),
+        tmp_dir=tmp_path / "tmp",
+        hub=FakeHub(gate_path=str(gate)),
+    )
     source = store.add_source("hf", "huggingface", params={"repo_id": "org/ds"})
     client = TestClient(create_app(store))
     try:
@@ -273,12 +316,17 @@ def test_pipeline_processes_file_without_waiting_for_others(tmp_path, ray_runtim
     """Per-file pipeline: file A finishes download->process->persist while
     file B is still blocked mid-download (no whole-batch wait)."""
     gate = tmp_path / "gate"
-    hub = FakeHub(files=["data/a.png", "data/b.png"],
-                  gate_path=str(gate), gated_suffix="b.png")
+    hub = FakeHub(
+        files=["data/a.png", "data/b.png"], gate_path=str(gate), gated_suffix="b.png"
+    )
     with open_store(data_dir=tmp_path / "data") as store:
         source = _add_hf_source(store, workers=2)
-        thread = threading.Thread(target=store.sync_source, args=(source.id,),
-                                  kwargs={"hub": hub}, daemon=True)
+        thread = threading.Thread(
+            target=store.sync_source,
+            args=(source.id,),
+            kwargs={"hub": hub},
+            daemon=True,
+        )
         thread.start()
 
         # while b.png is blocked downloading, a.png must already be persisted
@@ -314,9 +362,12 @@ def test_unified_log_format():
 # ------------------------------------------------------------ web async sync
 def test_web_async_sync_and_polling(tmp_path, ray_runtime):
 
-
-    store = AssetStore(tmp_path / "assets.db", LocalStorageBackend(tmp_path / "blobs"),
-                       tmp_dir=tmp_path / "tmp", hub=FakeHub())
+    store = AssetStore(
+        tmp_path / "assets.db",
+        LocalStorageBackend(tmp_path / "blobs"),
+        tmp_dir=tmp_path / "tmp",
+        hub=FakeHub(),
+    )
     source = store.add_source("hf", "huggingface", params={"repo_id": "org/ds"})
     client = TestClient(create_app(store))
     try:
@@ -334,7 +385,9 @@ def test_web_async_sync_and_polling(tmp_path, ray_runtime):
         assert run["progress"] == 100.0
 
         events = client.get(f"/api/sync/{run_id}/events").json()
-        assert {"download", "process", "persist", "done"} <= {ev["stage"] for ev in events}
+        assert {"download", "process", "persist", "done"} <= {
+            ev["stage"] for ev in events
+        }
 
         runs = client.get("/api/sync/runs").json()
         assert any(r["id"] == run_id for r in runs)
@@ -346,11 +399,13 @@ def test_web_async_sync_and_polling(tmp_path, ray_runtime):
 
 def test_web_sync_pause_resume_endpoints(tmp_path, ray_runtime):
 
-
     gate = tmp_path / "gate"
-    store = AssetStore(tmp_path / "assets.db", LocalStorageBackend(tmp_path / "blobs"),
-                       tmp_dir=tmp_path / "tmp",
-                       hub=FakeHub(gate_path=str(gate)))
+    store = AssetStore(
+        tmp_path / "assets.db",
+        LocalStorageBackend(tmp_path / "blobs"),
+        tmp_dir=tmp_path / "tmp",
+        hub=FakeHub(gate_path=str(gate)),
+    )
     source = store.add_source("hf", "huggingface", params={"repo_id": "org/ds"})
     client = TestClient(create_app(store))
     try:
@@ -383,11 +438,13 @@ def test_web_sync_pause_resume_endpoints(tmp_path, ray_runtime):
 
 def test_web_duplicate_sync_returns_409(tmp_path, ray_runtime):
 
-
     gate = tmp_path / "gate"
-    store = AssetStore(tmp_path / "assets.db", LocalStorageBackend(tmp_path / "blobs"),
-                       tmp_dir=tmp_path / "tmp",
-                       hub=FakeHub(gate_path=str(gate)))
+    store = AssetStore(
+        tmp_path / "assets.db",
+        LocalStorageBackend(tmp_path / "blobs"),
+        tmp_dir=tmp_path / "tmp",
+        hub=FakeHub(gate_path=str(gate)),
+    )
     source = store.add_source("hf", "huggingface", params={"repo_id": "org/ds"})
     client = TestClient(create_app(store))
     try:

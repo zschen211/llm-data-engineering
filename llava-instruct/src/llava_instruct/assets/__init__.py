@@ -1,16 +1,10 @@
 """Asset layer package: unified asset management (sources, download, storage,
 versioning, tags, snapshots) backed by SQLite metadata + pluggable blob storage.
 
-Legacy helpers (scan/classify/balance) are re-exported from ``classify`` for
-backward compatibility with the pre-asset-layer pipeline.
+Public entry point is ``api.py``; the ``classify`` helpers are re-exported
+here for the CLI's pool commands.
 """
-from .classify import (  # noqa: F401
-    IMAGE_SUFFIXES,
-    balance_assets,
-    build_asset_pool,
-    classify_image,
-    load_asset_pool,
-    scan_image_dir,
-)
+
+from .classify import IMAGE_SUFFIXES, balance_assets, classify_image  # noqa: F401
 
 __version__ = "0.1.0"

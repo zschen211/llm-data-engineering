@@ -1,0 +1,77 @@
+"""Sources resource: CRUD + background sync-run trigger."""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import asdict
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from ...log import get_logger
+from ..api import AssetStore
+
+logger = get_logger("assets.web")
+
+
+class SourceIn(BaseModel):
+    name: str
+    kind: str
+    url: str = ""
+    license: str = ""
+    description: str = ""
+    params: dict = Field(default_factory=dict)
+
+
+def make_router(store: AssetStore) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/api/sources")
+    def list_sources():
+        """Sources with their currently-running sync run id (None when idle)."""
+        return [
+            {
+                **asdict(s),
+                "running_run_id": (store.get_running_run(s.id) or {}).get("id"),
+            }
+            for s in store.list_sources()
+        ]
+
+    @router.post("/api/sources", status_code=201)
+    def add_source(body: SourceIn):
+        try:
+            return asdict(store.add_source(**body.model_dump()))
+        except Exception as exc:
+            raise HTTPException(400, str(exc))
+
+    @router.put("/api/sources/{source_id}")
+    def update_source(source_id: str, body: SourceIn):
+        source = store.update_source(source_id, **body.model_dump())
+        if source is None:
+            raise HTTPException(404, "source not found")
+        return asdict(source)
+
+    @router.delete("/api/sources/{source_id}", status_code=204)
+    def delete_source(source_id: str):
+        store.delete_source(source_id)
+
+    @router.post("/api/sources/{source_id}/sync", status_code=202)
+    def sync_source(source_id: str):
+        """Start a sync run in the background; poll /api/sync/{run_id}."""
+        try:
+            run_id = store.start_sync(source_id)
+        except ValueError as exc:
+            if "already syncing" in str(exc):
+                raise HTTPException(409, str(exc))
+            raise HTTPException(400, str(exc))
+
+        def _run():
+            try:
+                store.sync_source(source_id, run_id=run_id)
+            except Exception as exc:
+                logger.error("background sync run=%s failed: %s", run_id, exc)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"run_id": run_id}
+
+    return router

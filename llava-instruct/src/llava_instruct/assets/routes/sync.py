@@ -1,0 +1,48 @@
+"""Sync-run resource: run state, pause/resume control, event stream."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query
+
+from ..api import AssetStore
+
+
+def make_router(store: AssetStore) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/api/sync/runs")
+    def list_sync_runs(limit: int = Query(default=20, le=200)):
+        return store.list_sync_runs(limit=limit)
+
+    @router.get("/api/sync/{run_id}")
+    def get_sync_run(run_id: str):
+        run = store.get_sync_run(run_id)
+        if run is None:
+            raise HTTPException(404, "sync run not found")
+        return run
+
+    @router.post("/api/sync/{run_id}/pause")
+    def pause_sync(run_id: str):
+        try:
+            return store.pause_sync(run_id)
+        except ValueError as exc:
+            raise HTTPException(
+                404 if store.get_sync_run(run_id) is None else 400, str(exc)
+            )
+
+    @router.post("/api/sync/{run_id}/resume")
+    def resume_sync(run_id: str):
+        try:
+            return store.resume_sync(run_id)
+        except ValueError as exc:
+            raise HTTPException(
+                404 if store.get_sync_run(run_id) is None else 400, str(exc)
+            )
+
+    @router.get("/api/sync/{run_id}/events")
+    def get_sync_events(
+        run_id: str, after: int = 0, limit: int = Query(default=200, le=1000)
+    ):
+        return store.get_sync_events(run_id, after_id=after, limit=limit)
+
+    return router

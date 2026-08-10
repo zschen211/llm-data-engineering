@@ -173,24 +173,24 @@ class Candidate:     # process 的输出/persist 的输入
     asset_type: str; width: int|None; height: int|None; meta: dict
 ```
 
-**DownloadStage**（`downloaders/download.py`，网络密集型，仅 HF）：
+**DownloadStage**（`services/downloaders/download.py`，网络密集型，仅 HF）：
 - `resolve()`：枚举仓库文件（`subfolder`/`allow_patterns`/`ignore_patterns` 过滤）
 - `download()`：单文件拉取，指数退避重试（`attempts`，默认 3），tqdm 字节进度回调
 - `hub=` 参数可注入测试桩（生产默认 huggingface_hub，核心依赖）
 
-**Processor**（`downloaders/process.py` + `processors/`，按 `params.process` 注册表选择）：
+**Processor**（`services/downloaders/process.py` + `processors/`，按 `params.process` 注册表选择）：
 
 | name | 实现 | 转换逻辑 |
 | --- | --- | --- |
 | `file`（默认） | FileProcessor | 下载文件即资产（identity），`asset_type` 参数或文件名启发式分类 |
 | `parquet` | ParquetProcessor | 逐行解码 parquet 中的图片（HF Image 特征，流式批量读取），坏行跳过，处理后删除 parquet 释放磁盘 |
 
-**PersistStage**（`downloaders/persist.py`，唯一触碰存储层的阶段）：
+**PersistStage**（`services/downloaders/persist.py`，唯一触碰存储层的阶段）：
 - `persist_one()`：`backend.put_file`（内容寻址去重）→ sha256 查重 → 登记 `assets`（version=1）+ `downloads`，返回 `new`/`skipped`
 - 读-去重-插入在 `db.transaction()`（`BEGIN IMMEDIATE`）内执行：跨进程/跨线程的写者在此串行化，sha256 去重无竞态
 - `persist()`：批量执行并收集单候选错误（不拖垮整批）
 
-**本地目录导入**（`store.import_dir`）不走网络管线：直接扫描目录 → 分类 → 构造 Candidate → 交给 PersistStage，作为 store 级便捷 API 保留。
+**本地目录导入**（`services/sync.import_dir`）不走网络管线：直接扫描目录 → 分类 → 构造 Candidate → 交给 PersistStage，作为 store 级便捷 API 保留。
 
 ### sync 流程（Ray 逐文件任务）
 
@@ -270,7 +270,7 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 | --- | --- |
 | db | 八表 CRUD、sha256 唯一约束、版本历史、标签多对多、快照 |
 | storage | Local 内容寻址/去重；S3 后端用 moto（put/get/exists/流式） |
-| downloaders | local 导入分类；DownloadStage 重试/退避；PersistStage 事务去重 |
+| services/downloaders | local 导入分类；DownloadStage 重试/退避；PersistStage 事务去重 |
 | store | 端到端 sync（Ray）：resolve→下载→上传→登记→失败记录；并发去重；worker 崩溃重试；暂停/恢复 |
 | cli | init/source/import/sync/ls/tag/version/snapshot/export 全流程 |
 | web | TestClient：sources CRUD、资产筛选、打标、快照、预览 |
@@ -316,7 +316,7 @@ with open_store(backend=S3StorageBackend(...)) as store:
 | 快照 | `create_snapshot / list_snapshots / snapshot_assets` |
 | 物化 | `materialize / export_pool` |
 
-**内部模块（非公开）**：`db.py`（`Database`）、`storage.py`（`StorageBackend` 实现）、`downloaders/`、`registry.py` —— 仅资产层自身与测试使用，不在稳定 API 范围内。
+**内部模块（非公开）**：`meta/`（`db.py` 的 `Database`、`models.py`）、`storage/`（`StorageBackend` 实现）、`routes/`（API router）、`services/downloaders/` —— 仅资产层自身与测试使用，不在稳定 API 范围内。
 
 ## 13. 后续扩展
 

@@ -14,10 +14,11 @@ the sub-project folder.
 The three sub-projects mirror projects 3/5/14 of 《大模型数据工程》
 (datascale-ai.github.io/data_engineering_book/part14/):
 
-- **`llava-instruct/`** — LLaVA multimodal instruction data factory. Pipeline:
-  asset pool -> template-driven supervision construction -> QA -> bbox reverse
-  rendering -> train/val/smoke split + manifest. `sync_source` runs on Ray
-  (one task per file, sliding-window concurrency, crash auto-retry).
+- **`llava-instruct/`** — LLaVA multimodal asset factory: unified asset
+  layer (sources/download pipeline/storage/tags/versions/snapshots) with a
+  FastAPI management UI. `sync_source` runs on Ray (one task per file,
+  sliding-window concurrency, crash auto-retry). Programmatic entry:
+  `llava_instruct.assets.api`.
 - **`mm-rag/`** — multimodal RAG assistant for financial report PDFs.
 - **`video-generation/`** — T2V video data pipeline with six resumable,
   shardable stages.
@@ -31,13 +32,15 @@ uv sync --extra dev
 # Run all tests
 uv run pytest
 
-# Run the sub-project CLI
-uv run llava-instruct --help   # llava-instruct prepare-assets|generate|qa|render|split|asset
-uv run mm-rag --help
-uv run video-generation --help
+# Run the sub-project CLI / Web UI
+uv run python -c "from llava_instruct.assets.routes import default_app; uvicorn.run(default_app(), host='127.0.0.1', port=8000)"
 
 # Build a standalone package
 uv build
+
+# Lint check (ruff; also run after every code change, see Code quality)
+uv run ruff check src tests
+uv run ruff format --check src tests
 ```
 
 ## Dependency & import rules (MUST follow)
@@ -66,3 +69,18 @@ uv build
   use docstrings for that).
 - `pytest` runs from each sub-project's own folder; there is no root-level
   test config.
+
+## Code quality (MUST follow)
+
+- **Run ruff after every code change.** After any modification to a
+  sub-project, execute `uv run ruff check src tests` and
+  `uv run ruff format --check src tests` from that sub-project's folder
+  (the same checks as `llava-instruct/scripts/run_ruff.sh`). The change is
+  only done when ruff passes with zero findings.
+- **Fix whatever ruff reports.** When ruff reports errors, fix the code
+  according to the reported messages and re-run ruff; repeat until it passes
+  with zero findings. Do not stop after applying only the auto-fixable
+  subset.
+- Do not silence findings with `# noqa` to make the check pass; fix the code
+  (or, for deliberate blind-catch patterns such as BLE001, ask the user
+  first).

@@ -2,9 +2,9 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from llava_instruct.assets.store import AssetStore
+from llava_instruct.assets.api import AssetStore
+from llava_instruct.assets.routes import create_app
 from llava_instruct.assets.storage import LocalStorageBackend
-from llava_instruct.assets.web import create_app
 
 
 @pytest.fixture
@@ -58,10 +58,23 @@ def test_sources_api(client):
     assert response.status_code == 200
     assert response.json()[0]["kind"] == "local"
 
-    response = client.post("/api/sources", json={"name": "hf-src", "kind": "huggingface", "url": "https://hf.co", "params": {"repo_id": "org/ds"}})
+    response = client.post(
+        "/api/sources",
+        json={
+            "name": "hf-src",
+            "kind": "huggingface",
+            "url": "https://hf.co",
+            "params": {"repo_id": "org/ds"},
+        },
+    )
     assert response.status_code == 201
     source_id = response.json()["id"]
-    assert client.put(f"/api/sources/{source_id}", json={"name": "hf-src2", "kind": "huggingface"}).status_code == 200
+    assert (
+        client.put(
+            f"/api/sources/{source_id}", json={"name": "hf-src2", "kind": "huggingface"}
+        ).status_code
+        == 200
+    )
     assert client.delete(f"/api/sources/{source_id}").status_code == 204
 
 
@@ -74,8 +87,10 @@ def test_assets_api_filter_and_tag(client):
     assets = body["items"]
     assert len(assets) == 2
 
-    chart = [a for a in assets if a["asset_type"] == "document_image"][0]
-    response = client.post(f"/api/assets/{chart['id']}/tags", json={"name": "doc", "group": "task"})
+    chart = next(a for a in assets if a["asset_type"] == "document_image")
+    response = client.post(
+        f"/api/assets/{chart['id']}/tags", json={"name": "doc", "group": "task"}
+    )
     assert response.status_code == 201
     filtered = client.get("/api/assets", params={"tag": "task=doc"}).json()["items"]
     assert len(filtered) == 1

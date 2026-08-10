@@ -1,14 +1,13 @@
 """Cursor pagination tests: db keyset page, SQL-pushed filters, web API."""
+
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from llava_instruct.assets.db import Database
-
-from llava_instruct.assets.api import open_store
-from llava_instruct.assets.store import AssetStore
+from llava_instruct.assets.api import AssetStore, open_store
+from llava_instruct.assets.meta.db import Database
+from llava_instruct.assets.routes import create_app
 from llava_instruct.assets.storage import LocalStorageBackend
-from llava_instruct.assets.web import create_app
 
 
 @pytest.fixture
@@ -16,8 +15,17 @@ def db_with_assets(tmp_path):
     db = Database(tmp_path / "assets.db")
     source = db.add_source("s", "huggingface", params={"repo_id": "org/ds"})
     for i in range(60):
-        db.add_asset(f"ast_{i:04d}", source.id, f"img_{i:04d}.png",
-                     "general_image", f"k{i}", f"sha{i}", 100, 10, 10)
+        db.add_asset(
+            f"ast_{i:04d}",
+            source.id,
+            f"img_{i:04d}.png",
+            "general_image",
+            f"k{i}",
+            f"sha{i}",
+            100,
+            10,
+            10,
+        )
     yield db
     db.close()
 
@@ -41,9 +49,11 @@ def test_list_assets_page_continuity(db_with_assets):
 
 
 def test_list_assets_page_deterministic_order(db_with_assets):
-    items, cursor = db_with_assets.list_assets_page(limit=20)
+    items, _cursor = db_with_assets.list_assets_page(limit=20)
     ids = [a.id for a in items]
-    assert ids == sorted(ids, reverse=True)  # created_at DESC, id DESC (same-second tiebreak)
+    assert ids == sorted(
+        ids, reverse=True
+    )  # created_at DESC, id DESC (same-second tiebreak)
 
 
 def test_list_assets_page_tag_filter_in_sql(db_with_assets):
@@ -66,9 +76,18 @@ def test_count_assets_with_filters(db_with_assets):
     assert db_with_assets.count_assets(status="ready") == 60
     assert db_with_assets.count_assets(tags=["task=chart"]) == 1
     assert db_with_assets.count_assets(q="img_0002") == 1
-    db_with_assets.add_asset("ast_bad", db_with_assets.list_sources()[0].id,
-                             "broken.png", "general_image", "kb", "shab", 1, 1, 1,
-                             status="failed")
+    db_with_assets.add_asset(
+        "ast_bad",
+        db_with_assets.list_sources()[0].id,
+        "broken.png",
+        "general_image",
+        "kb",
+        "shab",
+        1,
+        1,
+        1,
+        status="failed",
+    )
     assert db_with_assets.count_assets(status="failed") == 1
 
 
@@ -81,8 +100,12 @@ def test_store_list_assets_page(tmp_path):
 
     with open_store(data_dir=tmp_path / "data") as store:
         source = store.add_source("hf", "huggingface", params={"repo_id": "org/ds"})
-        store._db.add_asset("ast_1", source.id, "a.png", "general_image", "k1", "sha1", 1, 1, 1)
-        store._db.add_asset("ast_2", source.id, "b.png", "general_image", "k2", "sha2", 1, 1, 1)
+        store._db.add_asset(
+            "ast_1", source.id, "a.png", "general_image", "k1", "sha1", 1, 1, 1
+        )
+        store._db.add_asset(
+            "ast_2", source.id, "b.png", "general_image", "k2", "sha2", 1, 1, 1
+        )
 
         page = store.list_assets_page(page_size=1)
         assert len(page["items"]) == 1
@@ -104,8 +127,11 @@ def test_web_assets_cursor_pagination(tmp_path):
     src.mkdir()
     Image.new("RGB", (10, 10), "red").save(src / "photo_a.png")
     Image.new("RGB", (10, 10), "gray").save(src / "doc_page1.png")
-    store = AssetStore(tmp_path / "assets.db", LocalStorageBackend(tmp_path / "blobs"),
-                       tmp_dir=tmp_path / "tmp")
+    store = AssetStore(
+        tmp_path / "assets.db",
+        LocalStorageBackend(tmp_path / "blobs"),
+        tmp_dir=tmp_path / "tmp",
+    )
     store.import_dir(src, source_name="web")
     client = TestClient(create_app(store))
     try:
@@ -113,12 +139,16 @@ def test_web_assets_cursor_pagination(tmp_path):
         assert len(page1["items"]) == 1
         assert page1["next_cursor"]
 
-        page2 = client.get("/api/assets", params={"page_size": 1, "cursor": page1["next_cursor"]}).json()
+        page2 = client.get(
+            "/api/assets", params={"page_size": 1, "cursor": page1["next_cursor"]}
+        ).json()
         assert len(page2["items"]) == 1
         assert page2["next_cursor"] is None
         assert page1["items"][0]["id"] != page2["items"][0]["id"]
 
-        assert client.get("/api/assets", params={"cursor": "garbage"}).status_code == 400
+        assert (
+            client.get("/api/assets", params={"cursor": "garbage"}).status_code == 400
+        )
         assert client.get("/api/assets", params={"page_size": 0}).status_code == 422
 
         search = client.get("/api/assets", params={"q": "photo_a"}).json()

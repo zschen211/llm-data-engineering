@@ -1,15 +1,14 @@
 """Backup tests: online backup API produces a consistent, restorable snapshot."""
+
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from llava_instruct.assets.api import open_store
-from llava_instruct.assets.db import Database
-from llava_instruct.assets.store import AssetStore
+from llava_instruct.assets.api import AssetStore, open_store
+from llava_instruct.assets.meta.db import Database
+from llava_instruct.assets.routes import create_app
 from llava_instruct.assets.storage import LocalStorageBackend
-from llava_instruct.assets.web import create_app
-from llava_instruct.cli import main
 
 
 def test_db_backup_to_restores_data(tmp_path):
@@ -48,31 +47,22 @@ def test_store_backup_default_path_and_restore(tmp_path):
         assert store.count_assets() == 3
         assert len(store.list_snapshots()) == 1
     backup_path = tmp_path / "data" / "backups"
-    backup = sorted(backup_path.glob("*.db"))[-1]
+    backup = max(backup_path.glob("*.db"))
     db = Database(backup)
     assert db.count_assets() == 3
     assert len(db.list_snapshots()) == 1
     db.close()
 
 
-def test_cli_backup(tmp_path):
-    src = tmp_path / "imgs"
-    src.mkdir()
-    Image.new("RGB", (10, 10), "red").save(src / "a.png")
-    assert main(["asset", "import", str(src), "--source-name", "imp",
-                 "--data-dir", str(tmp_path / "data")]) == 0
-    assert main(["asset", "backup", "--data-dir", str(tmp_path / "data")]) == 0
-    backups = list((tmp_path / "data" / "backups").glob("*.db"))
-    assert len(backups) == 1
-    assert backups[0].stat().st_size > 0
-
-
 def test_web_backup_endpoint(tmp_path):
     src = tmp_path / "imgs"
     src.mkdir()
     Image.new("RGB", (10, 10), "red").save(src / "a.png")
-    store = AssetStore(tmp_path / "assets.db", LocalStorageBackend(tmp_path / "blobs"),
-                       tmp_dir=tmp_path / "tmp")
+    store = AssetStore(
+        tmp_path / "assets.db",
+        LocalStorageBackend(tmp_path / "blobs"),
+        tmp_dir=tmp_path / "tmp",
+    )
     store.import_dir(src, source_name="web")
     client = TestClient(create_app(store))
     try:

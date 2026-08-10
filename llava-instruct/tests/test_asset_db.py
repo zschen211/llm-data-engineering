@@ -1,6 +1,8 @@
+import sqlite3
+
 import pytest
 
-from llava_instruct.assets.db import Database
+from llava_instruct.assets.meta.db import Database
 
 
 @pytest.fixture
@@ -11,7 +13,9 @@ def db(tmp_path):
 
 
 def test_source_crud(db):
-    source = db.add_source("coco", "http", url="https://cocodataset.org", params={"urls": []})
+    source = db.add_source(
+        "coco", "http", url="https://cocodataset.org", params={"urls": []}
+    )
     assert source.kind == "http"
     assert db.get_source(source.id).name == "coco"
     assert db.get_source_by_name("coco").id == source.id
@@ -24,14 +28,23 @@ def test_source_crud(db):
 
 def test_source_name_unique(db):
     db.add_source("a", "local")
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         db.add_source("a", "local")
 
 
 def test_asset_crud_and_versioning(db):
     source = db.add_source("s", "local")
-    asset = db.add_asset("ast_1", source.id, "photo.png", "general_image",
-                         "blobs/ab/abc.png", "abc123", 100, 120, 80)
+    asset = db.add_asset(
+        "ast_1",
+        source.id,
+        "photo.png",
+        "general_image",
+        "blobs/ab/abc.png",
+        "abc123",
+        100,
+        120,
+        80,
+    )
     assert asset.current_version == 1
     assert db.get_asset_by_sha256("abc123").id == "ast_1"
     assert len(db.version_history("ast_1")) == 1
@@ -50,8 +63,10 @@ def test_asset_crud_and_versioning(db):
 def test_asset_sha256_unique(db):
     source = db.add_source("s", "local")
     db.add_asset("ast_1", source.id, "a.png", "general_image", "k1", "same", 1, 1, 1)
-    with pytest.raises(Exception):
-        db.add_asset("ast_2", source.id, "b.png", "general_image", "k2", "same", 1, 1, 1)
+    with pytest.raises(sqlite3.IntegrityError):
+        db.add_asset(
+            "ast_2", source.id, "b.png", "general_image", "k2", "same", 1, 1, 1
+        )
 
 
 def test_tags(db):
@@ -99,3 +114,41 @@ def test_snapshots(db):
     assert db.get_snapshot("v1") is not None
     assert len(db.snapshot_assets("v1")) == 2
     assert len(db.list_snapshots()) == 1
+
+
+def test_sync_events_with_fraction(db):
+    run_id = "run_1"
+    db.append_sync_event(run_id, "download", "a.png", fraction=0.42)
+    events = db.get_sync_events(run_id)
+    assert events[0]["fraction"] == 0.42
+    assert (
+        db.append_sync_event(run_id, "download", "b.png", fraction=None)
+        > events[0]["id"]
+    )
+
+
+def test_sync_events_fraction_column_migrated(tmp_path):
+    """A pre-fraction database (old schema) gets the column added on open."""
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE sync_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          run_id TEXT DEFAULT '',
+          ts TEXT DEFAULT '',
+          stage TEXT DEFAULT '',
+          remote TEXT DEFAULT '',
+          level TEXT DEFAULT 'info',
+          message TEXT DEFAULT ''
+        );
+        """
+    )
+    conn.close()
+    database = Database(path)
+    try:
+        database.append_sync_event("run_1", "download", "a.png", fraction=0.5)
+        events = database.get_sync_events("run_1")
+        assert events[0]["fraction"] == 0.5
+    finally:
+        database.close()

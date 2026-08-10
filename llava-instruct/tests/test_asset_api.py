@@ -1,5 +1,6 @@
 """Unified public API contract: other modules access the asset layer only
 through llava_instruct.assets.api (open_store + AssetStore)."""
+
 import pytest
 from PIL import Image
 

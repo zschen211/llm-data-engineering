@@ -1,16 +1,13 @@
+import io
 from pathlib import Path
 
-import io
-
 import pyarrow as pa
-
 import pyarrow.parquet as pq
-
 import pytest
+from fakehub import FailingHub, FakeHub
 from PIL import Image
 
-from fakehub import FailingHub, FakeHub
-from llava_instruct.assets.store import AssetStore
+from llava_instruct.assets.api import AssetStore
 from llava_instruct.assets.storage import LocalStorageBackend
 
 
@@ -129,7 +126,6 @@ def test_delete_source_cascades(tmp_path):
 def test_sync_parquet_processor_end_to_end(tmp_path, ray_runtime):
     """huggingface source + process=parquet: parquet decoded into image assets."""
 
-
     images = []
     for i in range(3):
         buf = io.BytesIO()
@@ -141,12 +137,12 @@ def test_sync_parquet_processor_end_to_end(tmp_path, ray_runtime):
         parquet,
     )
 
-    hub = FakeHub(files=["data/val.parquet"],
-                  copies={"data/val.parquet": str(parquet)})
+    hub = FakeHub(files=["data/val.parquet"], copies={"data/val.parquet": str(parquet)})
     store = make_store(tmp_path)
     with store:
-        store.add_source("coco", "huggingface",
-                         params={"repo_id": "org/coco", "process": "parquet"})
+        store.add_source(
+            "coco", "huggingface", params={"repo_id": "org/coco", "process": "parquet"}
+        )
         source = store.list_sources()[0]
         report = store.sync_source(source.id, hub=hub)
         assert report.new == 3

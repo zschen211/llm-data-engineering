@@ -1,15 +1,15 @@
 """Parquet processor tests: decode downloaded parquet into image assets."""
+
 import io
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 from PIL import Image
 
-from llava_instruct.assets.downloaders.base import RemoteRef, sha256_of
-from llava_instruct.assets.downloaders.process import get_processor
-from llava_instruct.assets.downloaders.processors.parquet import _cell_bytes
+from llava_instruct.assets.services.downloaders.base import RemoteRef, sha256_of
+from llava_instruct.assets.services.downloaders.process import get_processor
+from llava_instruct.assets.services.downloaders.processors.parquet import _cell_bytes
 
 
 def _png_bytes(width=12, height=10, color="red") -> bytes:
@@ -20,15 +20,20 @@ def _png_bytes(width=12, height=10, color="red") -> bytes:
 
 def _make_parquet(path: Path, n: int = 3) -> Path:
     table = pa.table(
-        {"image": pa.array([_png_bytes(10 + i, 8 + i) for i in range(n)], type=pa.binary())}
+        {
+            "image": pa.array(
+                [_png_bytes(10 + i, 8 + i) for i in range(n)], type=pa.binary()
+            )
+        }
     )
     pq.write_table(table, path)
     return path
 
 
 def _remote(name="val.parquet") -> RemoteRef:
-    return RemoteRef(id="r1", name=name, path_in_repo=f"data/{name}",
-                     meta={"repo_id": "org/coco"})
+    return RemoteRef(
+        id="r1", name=name, path_in_repo=f"data/{name}", meta={"repo_id": "org/coco"}
+    )
 
 
 def test_parquet_processor_decodes_images(tmp_path):
@@ -53,13 +58,19 @@ def test_parquet_processor_decodes_images(tmp_path):
 
 def test_parquet_processor_skips_bad_rows(tmp_path):
     table = pa.table(
-        {"image": pa.array([_png_bytes(), b"not an image", _png_bytes()], type=pa.binary())}
+        {
+            "image": pa.array(
+                [_png_bytes(), b"not an image", _png_bytes()], type=pa.binary()
+            )
+        }
     )
     parquet = tmp_path / "mixed.parquet"
     pq.write_table(table, parquet)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    results = get_processor("parquet", {}).process(_remote("mixed.parquet"), parquet, out_dir)
+    results = get_processor("parquet", {}).process(
+        _remote("mixed.parquet"), parquet, out_dir
+    )
     assert len(results) == 2
 
 

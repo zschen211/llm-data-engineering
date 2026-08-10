@@ -8,6 +8,7 @@ function:
 Entry points (CLI main, web app, scripts) call ``setup_logging`` once; modules
 use ``get_logger(__name__)``.
 """
+
 from __future__ import annotations
 
 import logging

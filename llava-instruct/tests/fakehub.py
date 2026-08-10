@@ -9,14 +9,21 @@ import os
 import shutil
 import time
 from pathlib import Path
+from typing import ClassVar
 
 
 class FakeHub:
-    FILES = ["data/a.png", "data/b.png", "data/c.png"]
+    FILES: ClassVar[list[str]] = ["data/a.png", "data/b.png", "data/c.png"]
 
-    def __init__(self, files: list[str] | None = None, gate_path: str | None = None,
-                 gated_suffix: str = "c.png", fail: bool = False,
-                 timeout: float = 30.0, copies: dict | None = None):
+    def __init__(
+        self,
+        files: list[str] | None = None,
+        gate_path: str | None = None,
+        gated_suffix: str = "c.png",
+        fail: bool = False,
+        timeout: float = 30.0,
+        copies: dict | None = None,
+    ):
         self.files = list(files or self.FILES)
         self.gate_path = gate_path
         self.gated_suffix = gated_suffix
@@ -37,8 +44,9 @@ class FakeHub:
             time.sleep(0.02)
         raise RuntimeError(f"gate timed out for {filename}")
 
-    def hf_hub_download(self, repo_id, filename, repo_type="dataset",
-                        local_dir=None, **kwargs):
+    def hf_hub_download(
+        self, repo_id, filename, repo_type="dataset", local_dir=None, **kwargs
+    ):
         if self.fail:
             raise RuntimeError("connection reset")
         self._wait_gate(filename)
@@ -49,6 +57,12 @@ class FakeHub:
             shutil.copyfile(source, target)
         else:
             target.write_bytes(b"\x89PNG\r\n\x1a\n" + filename.encode("utf-8") * 16)
+        tqdm_cls = kwargs.get("tqdm_class")
+        if tqdm_cls is not None:
+            bar = tqdm_cls(desc="Downloading", total=100, unit="B")
+            bar.update(40)
+            bar.update(40)
+            bar.update(20)
         return target
 
 
@@ -62,6 +76,7 @@ class FailingHub(FakeHub):
 class CrashingHub(FakeHub):
     """Kills the worker process mid-task; Ray must retry, then give up."""
 
-    def hf_hub_download(self, repo_id, filename, repo_type="dataset",
-                        local_dir=None, **kwargs):
+    def hf_hub_download(
+        self, repo_id, filename, repo_type="dataset", local_dir=None, **kwargs
+    ):
         os._exit(1)
