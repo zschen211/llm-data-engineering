@@ -46,3 +46,5 @@ mm-rag/
 │   └── cli.py        # 命令入口
 └── tests/
 ```
+
+> 每个代码目录（`src/mm_rag/`、`tests/`）内都有 README，说明各文件职责与依赖关系。

@@ -79,3 +79,5 @@ video-generation/
 │   └── cli.py       # 命令入口
 └── tests/
 ```
+
+> 每个代码目录（`src/video_generation/`、`tests/`）内都有 README，说明各文件职责与依赖关系。
