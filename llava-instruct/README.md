@@ -11,7 +11,7 @@ uv sync --extra dev               # 基础 + 测试（所有运行时依赖均�
 uv run pytest
 
 # 启动 Web 管理界面（资产源 CRUD / 同步 / 标签 / 版本 / 快照 / 预览）
-uv run python -c "from llava_instruct.assets.routes import default_app; import uvicorn; uvicorn.run(default_app(), host='127.0.0.1', port=8000)"
+scripts/serve.sh [--port 8000] [--data-dir data]
 ```
 
 ## 数据资产层

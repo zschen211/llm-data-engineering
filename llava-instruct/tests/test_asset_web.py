@@ -25,7 +25,8 @@ def test_index_page(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "数据资产管理" in response.text
-    assert "llava-instruct asset manager" in response.text
+    assert "llava-instruct" in response.text
+    assert "data asset manager" in response.text
 
 
 def test_info_endpoint(client):

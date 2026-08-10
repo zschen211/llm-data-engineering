@@ -23,6 +23,7 @@ class FakeHub:
         fail: bool = False,
         timeout: float = 30.0,
         copies: dict | None = None,
+        deny: list[str] | None = None,
     ):
         self.files = list(files or self.FILES)
         self.gate_path = gate_path
@@ -30,6 +31,7 @@ class FakeHub:
         self.fail = fail
         self.timeout = timeout
         self.copies = copies or {}
+        self.deny = set(deny or [])
 
     def list_repo_files(self, repo_id, repo_type="dataset"):
         return self.files
@@ -49,6 +51,8 @@ class FakeHub:
     ):
         if self.fail:
             raise RuntimeError("connection reset")
+        if filename in self.deny:
+            raise RuntimeError(f"denied by test: {filename}")
         self._wait_gate(filename)
         target = Path(local_dir) / filename
         target.parent.mkdir(parents=True, exist_ok=True)

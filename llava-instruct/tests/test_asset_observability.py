@@ -186,24 +186,25 @@ def test_sync_pause_halts_between_files_and_resume_continues(tmp_path, ray_runti
             thread.join(timeout=60)
 
 
-def test_stale_paused_runs_marked_failed_on_reopen(tmp_path):
+def test_stale_paused_runs_marked_interrupted_on_reopen(tmp_path):
     with open_store(data_dir=tmp_path / "data") as store:
         source = _add_hf_source(store)
         run_id = store.start_sync(source.id)
         store.pause_sync(run_id)
     with open_store(data_dir=tmp_path / "data") as store:
         run = store.list_sync_runs()[0]
-        assert run["status"] == "failed"
+        assert run["status"] == "interrupted"
         assert "restart" in run["error"]
+        assert store.get_interrupted_run(source.id)["id"] == run_id
 
 
-def test_stale_runs_marked_failed_on_reopen(tmp_path):
+def test_stale_runs_marked_interrupted_on_reopen(tmp_path):
     with open_store(data_dir=tmp_path / "data") as store:
         source = _add_hf_source(store)
         store.start_sync(source.id)  # left "running"
     with open_store(data_dir=tmp_path / "data") as store:
         run = store.list_sync_runs()[0]
-        assert run["status"] == "failed"
+        assert run["status"] == "interrupted"
         assert "restart" in run["error"]
 
 
