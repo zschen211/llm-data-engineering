@@ -28,11 +28,13 @@ def make_router(store: AssetStore) -> APIRouter:
 
     @router.get("/api/sources")
     def list_sources():
-        """Sources with their currently-running sync run id (None when idle)."""
+        """Sources with their currently-running sync run id and their
+        crash-interrupted (resumable) run id (None when idle/finished)."""
         return [
             {
                 **asdict(s),
                 "running_run_id": (store.get_running_run(s.id) or {}).get("id"),
+                "resumable_run_id": (store.get_interrupted_run(s.id) or {}).get("id"),
             }
             for s in store.list_sources()
         ]
@@ -42,7 +44,7 @@ def make_router(store: AssetStore) -> APIRouter:
         try:
             return asdict(store.add_source(**body.model_dump()))
         except Exception as exc:
-            raise HTTPException(400, str(exc))
+            raise HTTPException(400, str(exc)) from exc
 
     @router.put("/api/sources/{source_id}")
     def update_source(source_id: str, body: SourceIn):
@@ -57,13 +59,23 @@ def make_router(store: AssetStore) -> APIRouter:
 
     @router.post("/api/sources/{source_id}/sync", status_code=202)
     def sync_source(source_id: str):
-        """Start a sync run in the background; poll /api/sync/{run_id}."""
+        """Start a sync run in the background; poll /api/sync/{run_id}.
+
+        When the source has a crash-interrupted run, that run is resumed
+        (file-level: persisted files are skipped, the rest continue), so the
+        frontend keeps seeing the interrupted run's per-file progress.
+        """
         try:
-            run_id = store.start_sync(source_id)
+            if store.get_interrupted_run(source_id):
+                run_id = store.resume_source(source_id)
+                resumed = True
+            else:
+                run_id = store.start_sync(source_id)
+                resumed = False
         except ValueError as exc:
             if "already syncing" in str(exc):
-                raise HTTPException(409, str(exc))
-            raise HTTPException(400, str(exc))
+                raise HTTPException(409, str(exc)) from exc
+            raise HTTPException(400, str(exc)) from exc
 
         def _run():
             try:
@@ -72,6 +84,6 @@ def make_router(store: AssetStore) -> APIRouter:
                 logger.error("background sync run=%s failed: %s", run_id, exc)
 
         threading.Thread(target=_run, daemon=True).start()
-        return {"run_id": run_id}
+        return {"run_id": run_id, "resumed": resumed}
 
     return router

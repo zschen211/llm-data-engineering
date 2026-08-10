@@ -126,6 +126,24 @@ CREATE TABLE IF NOT EXISTS sync_events (
   fraction REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sync_events_run ON sync_events(run_id, id);
+
+CREATE TABLE IF NOT EXISTS sync_tasks (
+  id TEXT PRIMARY KEY,
+  run_id TEXT DEFAULT '',
+  remote_id TEXT DEFAULT '',         -- stable across runs (sha1 of repo path)
+  name TEXT DEFAULT '',
+  path_in_repo TEXT DEFAULT '',
+  status TEXT DEFAULT 'pending',     -- pending / downloading / persisted / skipped / failed
+  bytes_downloaded INTEGER DEFAULT 0,
+  total_bytes INTEGER DEFAULT 0,
+  fraction REAL,
+  attempts INTEGER DEFAULT 0,
+  error TEXT DEFAULT '',
+  created_at TEXT DEFAULT '',
+  updated_at TEXT DEFAULT '',
+  UNIQUE (run_id, remote_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sync_tasks_run ON sync_tasks(run_id);
 """
 
 
@@ -143,7 +161,7 @@ def new_snapshot_id(manifest_sha1: str, assets: list[Asset]) -> str:
 
 def _snapshot_hash(assets: list[Asset]) -> str:
     payload = "\n".join(sorted(f"{a.id}:{a.current_version}" for a in assets))
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+    return hashlib.sha1(payload.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 class Database:
@@ -158,7 +176,7 @@ class Database:
         self._executescript(SCHEMA)
         self._migrate()
         if mark_stale:
-            self._mark_stale_runs_failed()
+            self._mark_stale_runs_interrupted()
 
     def _new_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
@@ -312,7 +330,8 @@ class Database:
         sets.append("updated_at = ?")
         values.append(utcnow())
         values.append(source_id)
-        self._conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = ?", values)
+        # keys allowlisted above; values parameterized
+        self._conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = ?", values)  # nosec B608
         return self.get_source(source_id)
 
     def delete_source(self, source_id: str) -> None:
@@ -402,7 +421,9 @@ class Database:
         clauses, values = self._asset_filters(asset_type, status, source_id, tags, q)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._conn.execute(
-            f"SELECT * FROM assets {where} ORDER BY created_at DESC, id DESC", values
+            # clauses from _asset_filters are code constants + placeholders
+            f"SELECT * FROM assets {where} ORDER BY created_at DESC, id DESC",  # nosec B608
+            values,
         ).fetchall()
         return self._assets_with_tags(rows)
 
@@ -427,7 +448,8 @@ class Database:
             values += [cursor[0], cursor[1]]
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._conn.execute(
-            f"SELECT * FROM assets {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+            # clauses from _asset_filters are code constants + placeholders
+            f"SELECT * FROM assets {where} ORDER BY created_at DESC, id DESC LIMIT ?",  # nosec B608
             values + [limit + 1],
         ).fetchall()
         has_more = len(rows) > limit
@@ -449,7 +471,9 @@ class Database:
         clauses, values = self._asset_filters(asset_type, status, source_id, tags, q)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         return self._conn.execute(
-            f"SELECT COUNT(*) FROM assets {where}", values
+            # clauses from _asset_filters are code constants + placeholders
+            f"SELECT COUNT(*) FROM assets {where}",  # nosec B608
+            values,
         ).fetchone()[0]
 
     @staticmethod
@@ -504,7 +528,9 @@ class Database:
                 "downloads",
             ):
                 self._conn.execute(
-                    f"DELETE FROM {table} WHERE asset_id = ?", (asset_id,)
+                    # table names are literal constants in this loop
+                    f"DELETE FROM {table} WHERE asset_id = ?",  # nosec B608
+                    (asset_id,),
                 )
             self._conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
 
@@ -759,7 +785,9 @@ class Database:
         values.append(utcnow())
         values.append(run_id)
         self._conn.execute(
-            f"UPDATE sync_runs SET {', '.join(sets)} WHERE id = ?", values
+            # keys allowlisted above; values parameterized
+            f"UPDATE sync_runs SET {', '.join(sets)} WHERE id = ?",  # nosec B608
+            values,
         )
 
     def get_sync_run(self, run_id: str) -> dict | None:
@@ -773,6 +801,18 @@ class Database:
         paused; a paused run keeps its entry point visible until resumed)."""
         row = self._conn.execute(
             "SELECT * FROM sync_runs WHERE source_id = ? AND status IN ('running', 'paused') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (source_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_interrupted_run(self, source_id: str) -> dict | None:
+        """The most recent interrupted (crash-stale) run of a source, if any.
+
+        An interrupted run keeps its per-file task table, so resuming it
+        continues exactly where the crash happened (file granularity)."""
+        row = self._conn.execute(
+            "SELECT * FROM sync_runs WHERE source_id = ? AND status = 'interrupted' "
             "ORDER BY created_at DESC LIMIT 1",
             (source_id,),
         ).fetchone()
@@ -811,13 +851,127 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def _mark_stale_runs_failed(self) -> None:
-        """Runs left 'running'/'paused' by a previous process are marked
-        failed on open (no worker thread survives a restart to resume them)."""
+    # ------------------------------------------------------------ sync tasks
+    TASK_FIELDS = (
+        "status",
+        "bytes_downloaded",
+        "total_bytes",
+        "fraction",
+        "attempts",
+        "error",
+    )
+
+    def create_sync_tasks(self, run_id: str, remotes) -> int:
+        """Insert one pending task per remote (INSERT OR IGNORE on
+        (run_id, remote_id), so resuming a run never duplicates tasks).
+        Returns the number of rows actually inserted."""
+        now = utcnow()
+        inserted = 0
+        for remote in remotes:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO sync_tasks "
+                "(id, run_id, remote_id, name, path_in_repo, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+                (
+                    new_id("tsk_"),
+                    run_id,
+                    remote.id,
+                    remote.name,
+                    remote.path_in_repo,
+                    now,
+                    now,
+                ),
+            )
+            inserted += cur.rowcount
+        return inserted
+
+    def reconcile_sync_tasks(self, run_id: str, remote_ids: set[str]) -> int:
+        """Fail tasks whose file disappeared from the repo while the run was
+        interrupted (resume against a changed file list)."""
+        if remote_ids:
+            placeholders = ",".join("?" * len(remote_ids))
+            sql = (
+                "UPDATE sync_tasks SET status = 'failed', error = 'file removed from repo', "
+                "updated_at = ? WHERE run_id = ? AND status IN ('pending', 'downloading') "
+                # placeholders are generated from the set size, values parameterized
+                f"AND remote_id NOT IN ({placeholders})"  # nosec B608
+            )
+            params: tuple = (utcnow(), run_id, *sorted(remote_ids))
+        else:
+            sql = (
+                "UPDATE sync_tasks SET status = 'failed', error = 'file removed from repo', "
+                "updated_at = ? WHERE run_id = ? AND status IN ('pending', 'downloading')"
+            )
+            params = (utcnow(), run_id)
+        cur = self._conn.execute(sql, params)
+        return cur.rowcount
+
+    def get_sync_tasks(self, run_id: str) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM sync_tasks WHERE run_id = ? ORDER BY path_in_repo, id",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_sync_tasks_page(
+        self, run_id: str, offset: int = 0, limit: int = 20
+    ) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM sync_tasks WHERE run_id = ? "
+            "ORDER BY path_in_repo, id LIMIT ? OFFSET ?",
+            (run_id, limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_sync_tasks(self, run_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM sync_tasks WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return row[0]
+
+    def get_sync_task(self, run_id: str, remote_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM sync_tasks WHERE run_id = ? AND remote_id = ?",
+            (run_id, remote_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def update_sync_task(self, run_id: str, remote_id: str, **fields) -> None:
+        sets = []
+        values: list = []
+        for key, value in fields.items():
+            if key not in self.TASK_FIELDS:
+                raise ValueError(f"unknown sync_task field: {key}")
+            sets.append(f"{key} = ?")
+            values.append(value)
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        values.append(utcnow())
+        values.append(run_id)
+        values.append(remote_id)
         self._conn.execute(
-            "UPDATE sync_runs SET status = 'failed', "
+            # keys allowlisted above; values parameterized
+            f"UPDATE sync_tasks SET {', '.join(sets)} "  # nosec B608
+            "WHERE run_id = ? AND remote_id = ?",
+            values,
+        )
+
+    def _mark_stale_runs_interrupted(self) -> None:
+        """Runs left 'running'/'paused' by a previous process become
+        'interrupted' on open (no worker thread survives a restart to resume
+        them). Their per-file tasks are reset to 'pending' so a later resume
+        resubmits only the unfinished files; the recorded bytes/fraction are
+        kept so the UI can show the last-known progress before retrying."""
+        self._conn.execute(
+            "UPDATE sync_runs SET status = 'interrupted', "
             "error = error || ' | interrupted by restart', updated_at = ? "
             "WHERE status IN ('running', 'paused')",
+            (utcnow(),),
+        )
+        self._conn.execute(
+            "UPDATE sync_tasks SET status = 'pending', updated_at = ? "
+            "WHERE status = 'downloading'",
             (utcnow(),),
         )
 

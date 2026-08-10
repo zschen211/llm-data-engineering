@@ -3,12 +3,15 @@
 Ground truth format (eval.jsonl):
   {"question": "...", "relevant_pages": [1, 5, 12], "is_directory_page": false}
 """
+
 from __future__ import annotations
 
 from .schema import read_jsonl
 
 
-def evaluate(retrieval_results: list[dict], ground_truth: list[dict], top_k: int = 4) -> dict:
+def evaluate(
+    retrieval_results: list[dict], ground_truth: list[dict], top_k: int = 4
+) -> dict:
     """Compute hit@k, evidence completeness and directory-page suppression.
 
     ``retrieval_results`` is a list of {"question", "retrieved": [page dicts]}.
@@ -37,7 +40,9 @@ def evaluate(retrieval_results: list[dict], ground_truth: list[dict], top_k: int
         "top_k": top_k,
         "hit_at_k": round(hits / n, 4),
         "evidence_completeness": round(evidence_hits / max(evidence_total, 1), 4),
-        "directory_suppression": round(1.0 - (dir_leaks / max(dir_total, 1)), 4) if dir_total else 1.0,
+        "directory_suppression": round(1.0 - (dir_leaks / max(dir_total, 1)), 4)
+        if dir_total
+        else 1.0,
         "directory_leaks": dir_leaks,
         "directory_pages_total": dir_total,
     }

@@ -9,6 +9,13 @@ import ray
 TESTS_DIR = Path(__file__).parent
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _test_log_dir(tmp_path_factory):
+    """Route persisted logs to a session temp dir: tests never write into the
+    repo, and every test that initializes logging exercises the file path."""
+    os.environ["LLAVA_LOG_DIR"] = str(tmp_path_factory.mktemp("logs"))
+
+
 @pytest.fixture(scope="session")
 def ray_runtime():
     """Session-scoped local Ray cluster for sync tests.

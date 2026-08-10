@@ -8,9 +8,15 @@ from mm_rag import pages
 def pdf_path(tmp_path):
     doc = fitz.open()
     page1 = doc.new_page()
-    page1.insert_text((72, 72), "Table of contents\nChapter 1\nChapter 2\nResearch development\nFinancial overview")
+    page1.insert_text(
+        (72, 72),
+        "Table of contents\nChapter 1\nChapter 2\nResearch development\nFinancial overview",
+    )
     page2 = doc.new_page()
-    page2.insert_text((72, 72), "Research and development spending rose from 100M to 150M over three years.")
+    page2.insert_text(
+        (72, 72),
+        "Research and development spending rose from 100M to 150M over three years.",
+    )
     path = tmp_path / "report.pdf"
     doc.save(str(path))
     doc.close()

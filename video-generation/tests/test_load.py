@@ -8,8 +8,20 @@ def test_parse_pexels_id():
 
 
 def test_normalize_video_record():
-    raw = {"video_id": 1, "page_url": "https://x", "author_name": "a", "license": "pexels"}
-    info = {"duration": 10.5, "fps": 25.0, "width": 1920, "height": 1080, "nb_frames": 262, "file_size": 100}
+    raw = {
+        "video_id": 1,
+        "page_url": "https://x",
+        "author_name": "a",
+        "license": "pexels",
+    }
+    info = {
+        "duration": 10.5,
+        "fps": 25.0,
+        "width": 1920,
+        "height": 1080,
+        "nb_frames": 262,
+        "file_size": 100,
+    }
     record = load.normalize_video_record(raw, "/tmp/v.mp4", info)
     assert record["video_id"] == 1
     assert record["duration"] == 10.5
@@ -19,7 +31,14 @@ def test_normalize_video_record():
 def test_load_source_videos_resumes(tmp_path, monkeypatch):
     (tmp_path / "pexels_1.mp4").write_bytes(b"fake")
     (tmp_path / "pexels_2.mp4").write_bytes(b"fake")
-    info = {"duration": 5.0, "fps": 24.0, "width": 640, "height": 480, "nb_frames": 120, "file_size": 42}
+    info = {
+        "duration": 5.0,
+        "fps": 24.0,
+        "width": 640,
+        "height": 480,
+        "nb_frames": 120,
+        "file_size": 42,
+    }
     calls = {"n": 0}
 
     def fake_ffprobe(path):
@@ -42,8 +61,16 @@ def test_load_source_videos_manifest_preferred(tmp_path, monkeypatch):
         '{"video_id": 1, "saved_as": "pexels_1.mp4", "page_url": "https://example.com", "author_name": "bob", "license": "pexels"}\n'
     )
     monkeypatch.setattr(
-        load, "ffprobe",
-        lambda path: {"duration": 5.0, "fps": 24.0, "width": 640, "height": 480, "nb_frames": 120, "file_size": 42},
+        load,
+        "ffprobe",
+        lambda path: {
+            "duration": 5.0,
+            "fps": 24.0,
+            "width": 640,
+            "height": 480,
+            "nb_frames": 120,
+            "file_size": 42,
+        },
     )
     out = tmp_path / "source_videos.jsonl"
     records = load.load_source_videos(tmp_path, out)
@@ -56,6 +83,5 @@ def test_ffprobe_missing_binary(tmp_path, monkeypatch):
         raise FileNotFoundError("ffprobe")
 
     monkeypatch.setattr("subprocess.run", boom)
-    import subprocess  # noqa: F401
 
     assert load.ffprobe(tmp_path / "x.mp4") is None

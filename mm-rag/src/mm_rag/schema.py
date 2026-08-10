@@ -1,4 +1,5 @@
 """Schema helpers shared across mm-rag stages."""
+
 from __future__ import annotations
 
 import json
@@ -13,13 +14,16 @@ def read_jsonl(path: Path) -> list[dict]:
 def write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.writelines(
+            json.dumps(record, ensure_ascii=False) + "\n" for record in records
+        )
 
 
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def read_json(path: Path) -> dict:

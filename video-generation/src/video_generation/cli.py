@@ -1,13 +1,17 @@
 """video-generation CLI: six pipeline stages + manifest builder."""
+
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
-from . import io, load as load_mod, manifest as manifest_mod, motion as motion_mod
-from . import scene as scene_mod, tag as tag_mod
+from . import io
+from . import load as load_mod
+from . import manifest as manifest_mod
+from . import motion as motion_mod
+from . import scene as scene_mod
+from . import tag as tag_mod
 
 
 def get_parser():
@@ -17,12 +21,19 @@ def get_parser():
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p1 = subparsers.add_parser("load-sources", help="Stage 1: probe source videos -> source_videos.jsonl")
-    p1.add_argument("src", type=Path, help="dir with pexels_*.mp4 / pexels_manifest.jsonl")
+    p1 = subparsers.add_parser(
+        "load-sources", help="Stage 1: probe source videos -> source_videos.jsonl"
+    )
+    p1.add_argument(
+        "src", type=Path, help="dir with pexels_*.mp4 / pexels_manifest.jsonl"
+    )
     p1.add_argument("--out", type=Path, default=Path("source_videos.jsonl"))
     p1.add_argument("--max-samples", type=int, default=None)
 
-    p2 = subparsers.add_parser("scene-detect", help="Stage 2: shot segmentation -> stage2_scenes.jsonl + shots/")
+    p2 = subparsers.add_parser(
+        "scene-detect",
+        help="Stage 2: shot segmentation -> stage2_scenes.jsonl + shots/",
+    )
     p2.add_argument("sources", type=Path)
     p2.add_argument("--out-root", type=Path, default=Path("out"))
     p2.add_argument("--out", type=Path, default=Path("stage2_scenes.jsonl"))
@@ -30,13 +41,18 @@ def get_parser():
     p2.add_argument("--min-shot-len", type=float, default=1.0)
     p2.add_argument("--max-samples", type=int, default=None)
 
-    p3 = subparsers.add_parser("motion-filter", help="Stage 3: optical-flow motion filtering")
+    p3 = subparsers.add_parser(
+        "motion-filter", help="Stage 3: optical-flow motion filtering"
+    )
     p3.add_argument("scenes", type=Path)
     p3.add_argument("--out", type=Path, default=Path("stage3_motion.jsonl"))
     p3.add_argument("--threshold", type=float, default=0.5)
     p3.add_argument("--workers", type=int, default=1)
 
-    p4 = subparsers.add_parser("aesthetic-filter", help="Stage 4: CLIP + LAION-Aesthetic scoring (requires gpu extra)")
+    p4 = subparsers.add_parser(
+        "aesthetic-filter",
+        help="Stage 4: CLIP + LAION-Aesthetic scoring (requires gpu extra)",
+    )
     p4.add_argument("scenes", type=Path)
     p4.add_argument("--out", type=Path, default=Path("stage4_aesthetic.jsonl"))
     p4.add_argument("--clip-path", type=str, default="ViT-L/14")
@@ -46,42 +62,62 @@ def get_parser():
     p4.add_argument("--num-shards", type=int, default=1)
     p4.add_argument("--shard-id", type=int, default=0)
 
-    p5 = subparsers.add_parser("caption", help="Stage 5: multi-frame VLM captioning (requires gpu extra)")
+    p5 = subparsers.add_parser(
+        "caption", help="Stage 5: multi-frame VLM captioning (requires gpu extra)"
+    )
     p5.add_argument("scenes", type=Path)
     p5.add_argument("--out", type=Path, default=Path("stage5_captions.jsonl"))
     p5.add_argument("--model", type=str, default="Qwen/Qwen2.5-VL-7B-Instruct")
-    p5.add_argument("--frames-dir", type=Path, default=None, help="saved frames; default: extract from segment")
+    p5.add_argument(
+        "--frames-dir",
+        type=Path,
+        default=None,
+        help="saved frames; default: extract from segment",
+    )
     p5.add_argument("--frames", type=int, default=8)
     p5.add_argument("--min-words", type=int, default=50)
     p5.add_argument("--max-samples", type=int, default=None)
 
-    p6 = subparsers.add_parser("tag-shot-language", help="Stage 6: controlled-vocab shot tags + camera motion")
+    p6 = subparsers.add_parser(
+        "tag-shot-language", help="Stage 6: controlled-vocab shot tags + camera motion"
+    )
     p6.add_argument("scenes", type=Path)
     p6.add_argument("--out", type=Path, default=Path("stage6_shot_language.jsonl"))
     p6.add_argument("--vlm", type=str, default=None, help="VLM model name (optional)")
     p6.add_argument("--max-samples", type=int, default=None)
 
-    p7 = subparsers.add_parser("build-manifest", help="Merge all stages into the final T2V manifest")
+    p7 = subparsers.add_parser(
+        "build-manifest", help="Merge all stages into the final T2V manifest"
+    )
     p7.add_argument("--sources", type=Path, default=Path("source_videos.jsonl"))
     p7.add_argument("--scenes", type=Path, default=Path("stage2_scenes.jsonl"))
     p7.add_argument("--motion", type=Path, default=Path("stage3_motion.jsonl"))
     p7.add_argument("--aesthetic", type=Path, default=Path("stage4_aesthetic.jsonl"))
     p7.add_argument("--captions", type=Path, default=Path("stage5_captions.jsonl"))
-    p7.add_argument("--shot-language", type=Path, default=Path("stage6_shot_language.jsonl"))
+    p7.add_argument(
+        "--shot-language", type=Path, default=Path("stage6_shot_language.jsonl")
+    )
     p7.add_argument("--out", type=Path, default=Path("final_manifest.jsonl"))
     return parser
 
 
 def cmd_load_sources(args):
-    records = load_mod.load_source_videos(args.src, args.out, max_samples=args.max_samples)
+    records = load_mod.load_source_videos(
+        args.src, args.out, max_samples=args.max_samples
+    )
     print(f"source videos: {len(records)} -> {args.out}")
     return 0
 
 
 def cmd_scene_detect(args):
-    records = scene_mod.run_scene_detect(args.sources, args.out_root, args.out,
-                                         threshold=args.threshold, min_shot_len=args.min_shot_len,
-                                         max_samples=args.max_samples)
+    records = scene_mod.run_scene_detect(
+        args.sources,
+        args.out_root,
+        args.out,
+        threshold=args.threshold,
+        min_shot_len=args.min_shot_len,
+        max_samples=args.max_samples,
+    )
     print(f"shots: {len(records)} -> {args.out}")
     return 0
 
@@ -91,7 +127,9 @@ def cmd_motion_filter(args):
     with io.SafeJsonlWriter(args.out) as writer:
         for i, shot in enumerate(shots):
             if args.workers == 1 or i % args.workers == 0:
-                writer.append(motion_mod.motion_filter_one(shot, threshold=args.threshold))
+                writer.append(
+                    motion_mod.motion_filter_one(shot, threshold=args.threshold)
+                )
     print(f"motion records: {len(shots)}")
     return 0
 
@@ -105,17 +143,23 @@ def cmd_aesthetic_filter(args):
     if args.mlp_path:
         import torch
 
-        state = torch.load(args.mlp_path, map_location="cpu")
+        state = torch.load(args.mlp_path, map_location="cpu", weights_only=True)
         mlp.load_state_dict(state if isinstance(state, dict) else state.state_dict())
     with io.SafeJsonlWriter(args.out) as writer:
         for i, shot in enumerate(shots):
             if io.shard_for(i, args.num_shards) != args.shard_id:
                 continue
             record = {"shot_id": shot["shot_id"], "segment_path": shot["segment_path"]}
-            record.update(aesthetic_mod.score_shot_aesthetic(
-                shot["segment_path"], model, preprocess, mlp,
-                frames=args.frames, threshold=args.threshold,
-            ))
+            record.update(
+                aesthetic_mod.score_shot_aesthetic(
+                    shot["segment_path"],
+                    model,
+                    preprocess,
+                    mlp,
+                    frames=args.frames,
+                    threshold=args.threshold,
+                )
+            )
             writer.append(record)
     print(f"aesthetic records written to shard {args.shard_id}")
     return 0
@@ -123,7 +167,10 @@ def cmd_aesthetic_filter(args):
 
 def _shot_frames(shot: dict, frames_dir: Path | None) -> list[str]:
     if frames_dir is not None:
-        return [str(p) for p in sorted(frames_dir.glob("*.jpg")) + sorted(frames_dir.glob("*.png"))]
+        return [
+            str(p)
+            for p in sorted(frames_dir.glob("*.jpg")) + sorted(frames_dir.glob("*.png"))
+        ]
     return [shot["segment_path"]]
 
 
@@ -137,8 +184,11 @@ def cmd_caption(args):
             if args.max_samples is not None and i >= args.max_samples:
                 break
             result = caption_mod.generate_video_caption(
-                _shot_frames(shot, args.frames_dir), model, processor,
-                frames_n=args.frames, min_words=args.min_words,
+                _shot_frames(shot, args.frames_dir),
+                model,
+                processor,
+                frames_n=args.frames,
+                min_words=args.min_words,
             )
             writer.append({"shot_id": shot["shot_id"], **result})
     print("captions written")
@@ -149,19 +199,26 @@ def cmd_tag_shot_language(args):
     shots = io.read_jsonl(args.scenes)
     vlm_fn = None
     if args.vlm:
-        def vlm_fn(frame_paths, allowed_vocab):
+
+        def _vlm_caption(frame_paths, allowed_vocab):
             from . import caption as caption_mod
 
             model, processor = caption_mod.load_vlm(args.vlm)
             caption_mod.generate_video_caption(frame_paths, model, processor)
             return {k: "unknown" for k in allowed_vocab}
 
+        vlm_fn = _vlm_caption
+
     with io.SafeJsonlWriter(args.out) as writer:
         for i, shot in enumerate(shots):
             if args.max_samples is not None and i >= args.max_samples:
                 break
-            record = tag_mod.tag_shot_language(shot["shot_id"], shot["segment_path"],
-                                               _shot_frames(shot, None), vlm_fn=vlm_fn)
+            record = tag_mod.tag_shot_language(
+                shot["shot_id"],
+                shot["segment_path"],
+                _shot_frames(shot, None),
+                vlm_fn=vlm_fn,
+            )
             writer.append(record)
     print(f"shot-language records: {len(shots)}")
     return 0

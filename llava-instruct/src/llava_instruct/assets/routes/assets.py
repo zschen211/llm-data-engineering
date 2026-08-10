@@ -50,7 +50,7 @@ def make_router(store: AssetStore) -> APIRouter:
                 page_size=page_size,
             )
         except ValueError as exc:
-            raise HTTPException(400, str(exc))
+            raise HTTPException(400, str(exc)) from exc
 
     @router.get("/api/assets/{asset_id}")
     def get_asset(asset_id: str):
@@ -72,7 +72,7 @@ def make_router(store: AssetStore) -> APIRouter:
         try:
             store.tag_asset(asset_id, body.name, body.group)
         except ValueError as exc:
-            raise HTTPException(404, str(exc))
+            raise HTTPException(404, str(exc)) from exc
 
     @router.delete("/api/assets/{asset_id}/tags/{tag_name}", status_code=204)
     def untag_asset(asset_id: str, tag_name: str):

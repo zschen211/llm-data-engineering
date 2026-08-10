@@ -4,9 +4,11 @@ The system prompt explicitly tells the model that some images may be
 table-of-contents pages and must be ignored, and that answers must cite
 evidence pages (P05 section 10).
 """
+
 from __future__ import annotations
 
-IMAGE_TOKEN = "<image>"
+# VLM template token, not a credential (B105 name-pattern false positive)
+IMAGE_TOKEN = "<image>"  # nosec B105
 
 SYSTEM_PROMPT = (
     "You are a financial analyst assistant. The user provides a question and "
@@ -35,12 +37,10 @@ def build_messages(query: str, evidence: list[dict]) -> list[dict]:
 def format_fallback_answer(query: str, evidence: list[dict]) -> dict:
     """Deterministic evidence-organizing answer used when no VLM is available."""
     page_numbers = ", ".join(f"p{int(e['page_no'])}" for e in evidence) or "无"
-    conclusion = (
-        "基于 {n} 页证据组织的候选回答（未调用视觉模型，请接入 VLM 后生成最终结论）".format(
-            n=len(evidence)
-        )
-    )
+    conclusion = f"基于 {len(evidence)} 页证据组织的候选回答（未调用视觉模型，请接入 VLM 后生成最终结论）"
     return {
-        "answer": ANSWER_TEMPLATE.format(conclusion=conclusion, page_numbers=page_numbers),
+        "answer": ANSWER_TEMPLATE.format(
+            conclusion=conclusion, page_numbers=page_numbers
+        ),
         "evidence_pages": [e["page_no"] for e in evidence],
     }

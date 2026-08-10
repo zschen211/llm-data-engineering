@@ -4,6 +4,7 @@ Each page gets a stable image file, a page_id, a page_no mapping and the
 extracted text (used as fallback for lexical indexing). Page images are bound
 to the index so retrieval results can always point back to the original page.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,7 +14,9 @@ import fitz
 from .schema import write_jsonl
 
 
-def render_page(page, out_dir: Path, dpi: int = 144, page_no: int = 1, source: str = "") -> dict:
+def render_page(
+    page, out_dir: Path, dpi: int = 144, page_no: int = 1, source: str = ""
+) -> dict:
     pix = page.get_pixmap(dpi=dpi)
     image_name = f"page_{page_no:04d}.png"
     image_path = out_dir / image_name
@@ -35,7 +38,11 @@ def render_pdf(pdf_path: Path, out_dir: Path, dpi: int = 144) -> list[dict]:
     records = []
     try:
         for page_no, page in enumerate(doc, start=1):
-            records.append(render_page(page, out_dir, dpi=dpi, page_no=page_no, source=str(pdf_path)))
+            records.append(
+                render_page(
+                    page, out_dir, dpi=dpi, page_no=page_no, source=str(pdf_path)
+                )
+            )
     finally:
         doc.close()
     return records

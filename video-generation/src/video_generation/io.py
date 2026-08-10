@@ -1,4 +1,5 @@
 """Resumable, sharded JSONL I/O shared by all pipeline stages."""
+
 from __future__ import annotations
 
 import json
@@ -11,12 +12,16 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 class SafeJsonlWriter:
-    """Append-only JSONL writer that never corrupts existing records."""
+    """Append-only JSONL writer that never corrupts existing records.
+
+    Must be used as a context manager (``with SafeJsonlWriter(path) as w``);
+    the file is opened on ``__enter__``.
+    """
 
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self.path, "a", encoding="utf-8")
+        self._fh = None  # opened in __enter__ (context-manager contract)
 
     def append(self, record: dict) -> None:
         self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -26,6 +31,7 @@ class SafeJsonlWriter:
         self._fh.close()
 
     def __enter__(self):
+        self._fh = open(self.path, "a", encoding="utf-8")
         return self
 
     def __exit__(self, *exc):

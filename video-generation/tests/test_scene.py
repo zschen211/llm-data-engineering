@@ -1,5 +1,3 @@
-import pytest
-
 from video_generation import scene
 
 
@@ -48,30 +46,48 @@ class _FakeSceneManager:
         self.detector = detector
 
     def detect_scenes(self, video, show_progress=True):
-        self.scenes = [(_TC(0), _TC(4)), (_TC(4), _TC(10))]
+        # fake detector object
+        self.scenes = [(_TC(0), _TC(4)), (_TC(4), _TC(10))]  # pylint: disable=attribute-defined-outside-init
 
     def get_scene_list(self):
         return self.scenes
 
 
 def test_run_scene_detect_resumes(tmp_path, monkeypatch):
-    from video_generation.io import SafeJsonlWriter, read_jsonl
+    from video_generation.io import SafeJsonlWriter
 
     source = tmp_path / "source.jsonl"
-    source.write_text('{"video_id": 1, "path": "/v.mp4"}\n{"video_id": 2, "path": "/w.mp4"}\n')
+    source.write_text(
+        '{"video_id": 1, "path": "/v.mp4"}\n{"video_id": 2, "path": "/w.mp4"}\n'
+    )
     monkeypatch.setattr(
-        scene, "split_one_video",
+        scene,
+        "split_one_video",
         lambda record, root, threshold=27.0, min_shot_len=1.0: [
-            {"shot_id": f"pexels_{record['video_id']}_shot_0000", "video_id": record["video_id"],
-             "start_ts": 0.0, "end_ts": 1.0, "segment_path": "/shots/x.mp4", "status": "ok"}
+            {
+                "shot_id": f"pexels_{record['video_id']}_shot_0000",
+                "video_id": record["video_id"],
+                "start_ts": 0.0,
+                "end_ts": 1.0,
+                "segment_path": "/shots/x.mp4",
+                "status": "ok",
+            }
         ],
     )
     out = tmp_path / "stage2_scenes.jsonl"
     first = scene.run_scene_detect(source, tmp_path, out)
     assert len(first) == 2
     with SafeJsonlWriter(out) as w:
-        w.append({"shot_id": "pexels_2_shot_0000", "video_id": 2, "start_ts": 0.0,
-                  "end_ts": 1.0, "segment_path": "/shots/x.mp4", "status": "ok"})
+        w.append(
+            {
+                "shot_id": "pexels_2_shot_0000",
+                "video_id": 2,
+                "start_ts": 0.0,
+                "end_ts": 1.0,
+                "segment_path": "/shots/x.mp4",
+                "status": "ok",
+            }
+        )
 
     def should_not_run(*args, **kwargs):
         raise AssertionError("should not run")

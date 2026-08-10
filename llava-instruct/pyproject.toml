@@ -20,6 +20,9 @@ dev = [
     "pytest-cov>=5.0.0",
     "moto[s3]>=5.0.0",
     "httpx>=0.27.0",
+    "bandit>=1.7.0",
+    "pylint>=3.0.0",
+    "radon>=6.0.0",
     "ruff>=0.9.0",
 ]
 
@@ -38,3 +41,35 @@ testpaths = ["tests"]
 # retry, per-file error collection, background-thread fallback); approved
 # project-wide on 2026-08-10.
 ignore = ["BLE001"]
+
+[tool.pylint]
+fail-under = 8
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+    "line-too-long", # ruff owns line-length policy
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring", # docstrings only where design intent (AGENTS.md)
+    "duplicate-code",
+    "invalid-name", # module-level mutable singletons (log.py)
+    "global-statement", # log.py listener singleton
+    "no-member", # composition-facade mixins: services/* reference AssetStore state
+    "redefined-builtin", # API params deliberately named type/license
+    "unused-argument", # pytest fixtures + interface stubs
+    "redefined-outer-name", # pytest fixture arg shadowing
+    "protected-access", # tests poke internals deliberately
+    "disallowed-name", # tests use foo/bar
+    "broad-exception-caught", # deliberate blind-catch pattern (ruff BLE001 approved)
+    "too-many-ancestors", # AssetStore composition facade
+    "too-many-instance-attributes",
+    "too-many-public-methods",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "too-many-locals",
+    "too-many-statements",
+    "too-few-public-methods",
+    "too-many-branches",
+    "too-many-nested-blocks",
+    "too-many-return-statements",
+]

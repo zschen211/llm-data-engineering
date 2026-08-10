@@ -5,6 +5,7 @@ description = "T2V video generation data pipeline: source load, scene detection,
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
+    "pillow>=10.0.0",
     "scenedetect>=0.6.4",
     "opencv-python-headless>=4.9",
 ]
@@ -16,6 +17,10 @@ video-generation = "video_generation.cli:main"
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
+    "bandit>=1.7.0",
+    "pylint>=3.0.0",
+    "radon>=6.0.0",
+    "ruff>=0.9.0",
 ]
 gpu = [
     "torch",
@@ -31,3 +36,37 @@ packages = ["src/video_generation"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# BLE001: blind `except Exception` is a deliberate pattern here (per-stage
+# failure recovery + resumable writes); approved project-wide.
+ignore = ["BLE001"]
+
+[tool.pylint]
+fail-under = 8
+# cv2 is a compiled extension without type stubs; member access is
+# dynamically generated.
+generated-members = ["cv2.*"]
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+    "line-too-long", # ruff owns line-length policy
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring", # docstrings only where design intent (AGENTS.md)
+    "duplicate-code",
+    "invalid-name",
+    "unused-argument", # pytest fixtures + interface stubs
+    "redefined-outer-name", # pytest fixture arg shadowing
+    "protected-access", # tests poke internals deliberately
+    "broad-exception-caught", # deliberate blind-catch pattern (ruff BLE001 approved)
+    "import-error", # gpu-extra guard imports (torch/transformers/clip) not installed in dev
+    "import-outside-toplevel", # gpu-extra guard imports: documented exception (AGENTS.md)
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "too-many-locals",
+    "too-many-statements",
+    "too-few-public-methods",
+    "too-many-branches",
+    "too-many-return-statements",
+]

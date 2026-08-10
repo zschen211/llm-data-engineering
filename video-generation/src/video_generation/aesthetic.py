@@ -3,6 +3,7 @@
 Requires the optional ``gpu`` extra (torch). Frames are sampled evenly and
 scores averaged; supports GPU sharding and OOM degradation via ``safe_call``.
 """
+
 from __future__ import annotations
 
 import functools
@@ -13,26 +14,33 @@ logger = logging.getLogger(__name__)
 
 def _require_torch():
     try:
-        import torch  # noqa: F401
-        import torch.nn as nn  # noqa: F401
+        import torch
+        from torch import nn
 
         return torch, nn
     except ImportError as exc:
-        raise RuntimeError("aesthetic scoring requires the optional 'gpu' extra (torch + transformers + clip)") from exc
+        raise RuntimeError(
+            "aesthetic scoring requires the optional 'gpu' extra (torch + transformers + clip)"
+        ) from exc
 
 
 def build_aesthetic_mlp(input_size: int = 768):
     """LAION-Aesthetic style MLP predictor."""
-    torch, nn = _require_torch()
+    _, nn = _require_torch()
     return nn.Sequential(
-        nn.Linear(input_size, 1024), nn.Dropout(0.2),
-        nn.Linear(1024, 128), nn.Dropout(0.2),
-        nn.Linear(128, 64), nn.Linear(64, 16), nn.Linear(16, 1),
+        nn.Linear(input_size, 1024),
+        nn.Dropout(0.2),
+        nn.Linear(1024, 128),
+        nn.Dropout(0.2),
+        nn.Linear(128, 64),
+        nn.Linear(64, 16),
+        nn.Linear(16, 1),
     )
 
 
 def safe_call(stages: tuple[str, ...] = ("batch", "frames", "resolution", "length")):
     """Decorator: degrade batch/frames/resolution/length on OOM instead of dying."""
+
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
@@ -45,7 +53,7 @@ def safe_call(stages: tuple[str, ...] = ("batch", "frames", "resolution", "lengt
                         raise
                     last = exc
                     logger.warning("OOM at %s, degrading", stage)
-            raise RuntimeError(f"OOM after degrading through all stages") from last
+            raise RuntimeError("OOM after degrading through all stages") from last
 
         return wrapper
 
@@ -56,8 +64,9 @@ def _load_clip_model(clip_path: str):
     try:
         import clip
     except ImportError as exc:
-        raise RuntimeError("aesthetic scoring requires the optional 'gpu' extra (clip)") from exc
-    import torch
+        raise RuntimeError(
+            "aesthetic scoring requires the optional 'gpu' extra (clip)"
+        ) from exc
 
     model, preprocess = clip.load(clip_path, device="cuda")
     return model, preprocess
@@ -85,8 +94,15 @@ def sample_frames_pil(segment_path: str, k: int = 4) -> list:
 
 
 @safe_call()
-def score_shot_aesthetic(segment_path: str, clip_model, clip_processor, aesthetic_mlp,
-                         frames: int = 4, threshold: float = 5.0, _degrade: str = "batch"):
+def score_shot_aesthetic(
+    segment_path: str,
+    clip_model,
+    clip_processor,
+    aesthetic_mlp,
+    frames: int = 4,
+    threshold: float = 5.0,
+    _degrade: str = "batch",
+):
     import torch
     import torch.nn.functional as F
 
@@ -94,10 +110,21 @@ def score_shot_aesthetic(segment_path: str, clip_model, clip_processor, aestheti
         frames = max(2, frames // 2)
     images = sample_frames_pil(segment_path, k=frames)
     if not images:
-        return {"aesthetic_score": 0.0, "pass_aesthetic": False, "status": "no_frames"}
-    feats = torch.cat([clip_processor(img).unsqueeze(0) for img in images], dim=0).to("cuda")
+        return {
+            "aesthetic_score": 0.0,
+            # B105: "pass_aesthetic" key name matches the password pattern
+            "pass_aesthetic": False,  # nosec B105
+            "status": "no_frames",
+        }
+    feats = torch.cat([clip_processor(img).unsqueeze(0) for img in images], dim=0).to(
+        "cuda"
+    )
     with torch.no_grad():
         feats = F.normalize(feats, p=2, dim=-1)
         scores = aesthetic_mlp(feats.to(aesthetic_mlp[0].weight.dtype)).squeeze(-1)
     avg = float(scores.mean().cpu())
-    return {"aesthetic_score": round(avg, 4), "pass_aesthetic": avg >= threshold, "status": "ok"}
+    return {
+        "aesthetic_score": round(avg, 4),
+        "pass_aesthetic": avg >= threshold,
+        "status": "ok",
+    }

@@ -33,14 +33,17 @@ uv sync --extra dev
 uv run pytest
 
 # Run the sub-project CLI / Web UI
-uv run python -c "from llava_instruct.assets.routes import default_app; uvicorn.run(default_app(), host='127.0.0.1', port=8000)"
+llava-instruct/scripts/serve.sh --port 8000   # asset-manager Web UI
 
 # Build a standalone package
 uv build
 
-# Lint check (ruff; also run after every code change, see Code quality)
-uv run ruff check src tests
-uv run ruff format --check src tests
+# Lint check (run after every code change, see Code quality)
+scripts/run_lint.sh                          # all gates: ruff + radon + pylint + bandit
+uv run ruff check src tests                  # or run them individually
+uv run radon cc src -s -n C                  # must print nothing (complexity <= B)
+uv run pylint src tests
+uv run bandit -r src -q
 ```
 
 ## Dependency & import rules (MUST follow)
@@ -72,15 +75,32 @@ uv run ruff format --check src tests
 
 ## Code quality (MUST follow)
 
-- **Run ruff after every code change.** After any modification to a
-  sub-project, execute `uv run ruff check src tests` and
-  `uv run ruff format --check src tests` from that sub-project's folder
-  (the same checks as `llava-instruct/scripts/run_ruff.sh`). The change is
-  only done when ruff passes with zero findings.
-- **Fix whatever ruff reports.** When ruff reports errors, fix the code
-  according to the reported messages and re-run ruff; repeat until it passes
-  with zero findings. Do not stop after applying only the auto-fixable
+Four lint gates guard every sub-project: **ruff**, **radon**, **pylint** and
+**bandit**. They are configured in each sub-project's `pyproject.toml`
+(`[tool.ruff.lint]`, `[tool.pylint.*]`); `scripts/run_lint.sh` runs all four
+(the same checks are documented in the Commands section).
+
+- **Run all four gates after every code change.** After any modification to a
+  sub-project, execute `scripts/run_lint.sh` from that sub-project's folder:
+  1. `uv run ruff check src tests` — zero findings
+  2. `uv run ruff format --check src tests` — zero files to reformat
+  3. `uv run radon cc src -s -n C` — must print nothing (no block ranked
+     C or worse, i.e. cyclomatic complexity must stay <= B, < 11)
+  4. `uv run pylint src tests` — exit code 0
+  5. `uv run bandit -r src -q` — exit code 0
+  The change is only done when every gate passes with zero findings.
+- **Fix whatever any gate reports.** When a tool reports errors, fix the code
+  according to the reported messages and re-run that tool; repeat until it
+  passes with zero findings. Do not stop after applying only the auto-fixable
   subset.
-- Do not silence findings with `# noqa` to make the check pass; fix the code
-  (or, for deliberate blind-catch patterns such as BLE001, ask the user
-  first).
+- Do not silence findings with `# noqa` / `# nosec` / inline
+  `# pylint: disable=` to make a gate pass; fix the code instead. The only
+  sanctioned inline suppressions are ones justified by a design-intent
+  comment (e.g. verified-safe f-string SQL for bandit B608, the documented
+  gpu-extra guard imports). The shared `disable`/`ignore` lists in
+  `pyproject.toml` cover the repo-wide deliberate patterns (e.g. BLE001
+  blind-catch, composition-facade `no-member`, pytest fixture warnings); do
+  not extend them per-finding without asking.
+- Complexity: keep every function/method at radon rank B or better (<= 10).
+  When a function drifts above B, extract phase helpers instead of raising
+  the radon threshold.

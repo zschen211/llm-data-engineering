@@ -31,7 +31,9 @@ import ray
 from ...meta.db import Database
 from ...meta.models import Source
 from ...storage import LocalStorageBackend, S3StorageBackend, StorageBackend
-from . import processors  # noqa: F401  (registers built-in processors)
+
+# side-effect import: registers the built-in processors (register_processor)
+from . import processors  # noqa: F401  # pylint: disable=unused-import
 from .base import RemoteRef
 from .download import DownloadStage
 from .persist import PersistStage
@@ -101,6 +103,7 @@ class SyncConfig:
     workers: int = 2
     attempts: int = 3
     hub: object | None = None
+    cache_dir: str = ""
 
 
 @dataclass
@@ -130,8 +133,10 @@ def _sync_file_task(cfg: SyncConfig, remote: RemoteRef) -> FileOutcome:
 
     Runs in a Ray worker: opens its own DB connection (mark_stale=False),
     rebuilds the backend, and writes progress events straight into
-    sync_events/sync_runs. All exceptions are converted into the outcome so a
-    failing file never fails the driver.
+    sync_events/sync_runs. The run's per-file task row (sync_tasks) tracks
+    status and byte progress, so an interrupted run can be resumed after a
+    crash. All exceptions are converted into the outcome so a failing file
+    never fails the driver.
     """
     db = Database(cfg.db_path, mark_stale=False)
     try:
@@ -144,6 +149,7 @@ def _sync_file_task(cfg: SyncConfig, remote: RemoteRef) -> FileOutcome:
         work_dir = Path(cfg.tmp_dir) / remote.id
         work_dir.mkdir(parents=True, exist_ok=True)
         outcome = FileOutcome(remote=remote.name)
+        remote_id = remote.id
 
         def event(
             stage: str,
@@ -151,18 +157,43 @@ def _sync_file_task(cfg: SyncConfig, remote: RemoteRef) -> FileOutcome:
             message: str = "",
             level: str = "info",
             fraction: float | None = None,
+            n: int | None = None,
+            total: int | None = None,
         ) -> None:
             db.append_sync_event(
                 cfg.run_id, stage, remote, level, message, fraction=fraction
             )
             db.update_sync_run(cfg.run_id, current_stage=stage, current_file=remote)
+            if stage == "download" and n is not None:
+                db.update_sync_task(
+                    cfg.run_id,
+                    remote_id,
+                    bytes_downloaded=n,
+                    total_bytes=total or 0,
+                    fraction=fraction,
+                )
 
         try:
             _wait_until_resumed(db, cfg.run_id)
+            task_row = db.get_sync_task(cfg.run_id, remote_id)
+            db.update_sync_task(
+                cfg.run_id,
+                remote_id,
+                status="downloading",
+                attempts=(task_row["attempts"] if task_row else 0) + 1,
+                bytes_downloaded=0,
+                fraction=0.0,
+                error="",
+            )
             event(
                 "download", remote.name, f"开始下载 → 暂存区 {work_dir / remote.name}"
             )
-            local = stage.download(remote, work_dir / remote.name, on_event=event)
+            local = stage.download(
+                remote,
+                work_dir / remote.name,
+                on_event=event,
+                cache_dir=Path(cfg.cache_dir) if cfg.cache_dir else None,
+            )
             event("download", remote.name, f"下载完成（{local.stat().st_size} 字节）")
             _wait_until_resumed(db, cfg.run_id)
             event("process", remote.name, f"开始解析 → {work_dir}")
@@ -176,6 +207,13 @@ def _sync_file_task(cfg: SyncConfig, remote: RemoteRef) -> FileOutcome:
                 f"持久化完成：新增 {new}，跳过 {skipped}"
                 + (f"，失败 {len(errors_in_persist)}" if errors_in_persist else ""),
             )
+            db.update_sync_task(
+                cfg.run_id,
+                remote_id,
+                status="failed" if errors_in_persist else "persisted",
+                fraction=1.0,
+                error="; ".join(errors_in_persist[:1]),
+            )
             outcome.new = new
             outcome.skipped = skipped
             outcome.failed = len(errors_in_persist)
@@ -184,6 +222,7 @@ def _sync_file_task(cfg: SyncConfig, remote: RemoteRef) -> FileOutcome:
             outcome.failed += 1
             outcome.errors.append(f"{remote.name}: {exc}")
             db.record_download(remote.id, cfg.source.kind, "failed", str(exc))
+            db.update_sync_task(cfg.run_id, remote_id, status="failed", error=str(exc))
             event("download", remote.name, f"处理失败: {exc}", level="error")
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -225,22 +264,32 @@ def run_ray_sync(
         remote = next(iterator)
         pending[task.remote(cfg, remote)] = remote
 
-    while pending:
-        park_if_paused()
-        ready, not_ready = ray.wait(list(pending), num_returns=1, timeout=30)
-        if not ready:
-            pending = {ref: pending[ref] for ref in not_ready}
-            continue
-        for ref in ready:
-            remote = pending.pop(ref)
-            try:
-                outcome = ray.get(ref)
-            except Exception as exc:
-                outcome = FileOutcome(
-                    remote=remote.name, failed=1, errors=[f"{remote.name}: {exc}"]
-                )
-            outcomes.append(outcome)
-            next_remote = next(iterator, None)
-            if next_remote is not None:
-                pending[task.remote(cfg, next_remote)] = next_remote
+    db = Database(cfg.db_path, mark_stale=False)
+    try:
+        while pending:
+            park_if_paused()
+            ready, not_ready = ray.wait(list(pending), num_returns=1, timeout=30)
+            if not ready:
+                pending = {ref: pending[ref] for ref in not_ready}
+                continue
+            for ref in ready:
+                remote = pending.pop(ref)
+                try:
+                    outcome = ray.get(ref)
+                except Exception as exc:
+                    # Retries exhausted: the worker died mid-task without
+                    # recording anything — mark the task failed so the file
+                    # is not re-submitted by a later resume.
+                    db.update_sync_task(
+                        cfg.run_id, remote.id, status="failed", error=str(exc)[:500]
+                    )
+                    outcome = FileOutcome(
+                        remote=remote.name, failed=1, errors=[f"{remote.name}: {exc}"]
+                    )
+                outcomes.append(outcome)
+                next_remote = next(iterator, None)
+                if next_remote is not None:
+                    pending[task.remote(cfg, next_remote)] = next_remote
+    finally:
+        db.close()
     return outcomes

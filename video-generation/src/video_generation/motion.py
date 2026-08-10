@@ -2,13 +2,12 @@
 
 Distinguishes "dynamic, trainable" shots from near-static image-like clips.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 import cv2
-import numpy as np
 
 
 @dataclass
@@ -17,8 +16,12 @@ class MotionStats:
     n_pairs: int
 
 
-def compute_motion_magnitude(path: str, proxy_wh: tuple[int, int] = (480, 270),
-                             stride: int = 2, max_pairs: int = 60) -> MotionStats:
+def compute_motion_magnitude(
+    path: str,
+    proxy_wh: tuple[int, int] = (480, 270),
+    stride: int = 2,
+    max_pairs: int = 60,
+) -> MotionStats:
     """Mean Farneback flow magnitude over sampled consecutive frame pairs."""
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
@@ -38,8 +41,9 @@ def compute_motion_magnitude(path: str, proxy_wh: tuple[int, int] = (480, 270),
                 cur_small = cv2.resize(frame, proxy_wh)
                 prev_gray = cv2.cvtColor(prev_small, cv2.COLOR_BGR2GRAY)
                 cur_gray = cv2.cvtColor(cur_small, cv2.COLOR_BGR2GRAY)
-                flow = cv2.calcOpticalFlowFarneback(prev_gray, cur_gray, None,
-                                                    0.5, 3, 15, 3, 5, 1.2, 0)
+                flow = cv2.calcOpticalFlowFarneback(
+                    prev_gray, cur_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0
+                )
                 mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
                 total += float(mag.mean())
                 pairs += 1
@@ -70,7 +74,8 @@ def failed_motion_record(shot_id: str, error: str) -> dict:
         "shot_id": shot_id,
         "motion_strength": 0.0,
         "n_pairs": 0,
-        "pass_motion": False,
+        # B105: "pass_motion" key name matches the password pattern
+        "pass_motion": False,  # nosec B105
         "status": "error",
         "error": error,
     }

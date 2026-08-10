@@ -1,4 +1,5 @@
 """Stage 2: shot segmentation with PySceneDetect + ffmpeg split."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,8 +14,9 @@ except ImportError:  # pragma: no cover
 from .io import SafeJsonlWriter, read_jsonl, scan_done_ids
 
 
-def split_one_video(record: dict, out_root: Path, threshold: float = 27.0,
-                    min_shot_len: float = 1.0) -> list[dict]:
+def split_one_video(
+    record: dict, out_root: Path, threshold: float = 27.0, min_shot_len: float = 1.0
+) -> list[dict]:
     """Detect scene boundaries and split one video into shot-level clips."""
     video = open_video(record["path"])
     manager = SceneManager()
@@ -53,9 +55,14 @@ def _seconds(td) -> float:
     return td.get_seconds()
 
 
-def run_scene_detect(source_videos_path: Path, out_root: Path, out_path: Path,
-                     threshold: float = 27.0, min_shot_len: float = 1.0,
-                     max_samples: int | None = None) -> list[dict]:
+def run_scene_detect(
+    source_videos_path: Path,
+    out_root: Path,
+    out_path: Path,
+    threshold: float = 27.0,
+    min_shot_len: float = 1.0,
+    max_samples: int | None = None,
+) -> list[dict]:
     """Process all videos into stage2_scenes.jsonl with resume support.
 
     Videos whose shots already appear in the output are skipped entirely.
@@ -70,7 +77,9 @@ def run_scene_detect(source_videos_path: Path, out_root: Path, out_path: Path,
                 break
             if str(record["video_id"]) in done_videos:
                 continue
-            shots = split_one_video(record, out_root, threshold=threshold, min_shot_len=min_shot_len)
+            shots = split_one_video(
+                record, out_root, threshold=threshold, min_shot_len=min_shot_len
+            )
             for shot in shots:
                 if shot["shot_id"] in done:
                     continue

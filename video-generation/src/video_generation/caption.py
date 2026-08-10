@@ -3,10 +3,8 @@
 Frames are sampled in time order and described as one continuous English
 paragraph (no per-frame enumeration).
 """
-from __future__ import annotations
 
-import os
-import re
+from __future__ import annotations
 
 CAPTION_PROMPT = (
     "Write one English paragraph describing the whole shot: subjects, setting, "
@@ -27,23 +25,37 @@ def sample_frames_in_time_order(frame_paths: list[str], k: int = 8) -> list[str]
 
 def _require_vlm():
     try:
-        import torch  # noqa: F401
-        from transformers import AutoModelForCausalLM, AutoProcessor  # noqa: F401
+        # availability probe for the optional gpu extra
+        import torch  # noqa: F401  # pylint: disable=unused-import
+        from transformers import AutoModelForCausalLM, AutoProcessor
 
         return AutoModelForCausalLM, AutoProcessor
     except ImportError as exc:
-        raise RuntimeError("captioning requires the optional 'gpu' extra (torch + transformers)") from exc
+        raise RuntimeError(
+            "captioning requires the optional 'gpu' extra (torch + transformers)"
+        ) from exc
 
 
 def load_vlm(model_name: str):
     AutoModelForCausalLM, AutoProcessor = _require_vlm()
-    processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", trust_remote_code=True)
+    # B615: model_name is operator-chosen at runtime; a commit-hash pin is
+    # not possible for arbitrary public checkpoints.
+    processor = AutoProcessor.from_pretrained(
+        model_name, trust_remote_code=True, revision="main"
+    )  # nosec B615
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto",
+        trust_remote_code=True,
+        revision="main",  # nosec B615
+    )
     return model, processor
 
 
 def _decode_new_tokens(gen_ids, input_ids, processor) -> str:
-    return processor.decode(gen_ids[0][input_ids.shape[1]:], skip_special_tokens=True).strip()
+    return processor.decode(
+        gen_ids[0][input_ids.shape[1] :], skip_special_tokens=True
+    ).strip()
 
 
 def torch_inference_guard():
@@ -53,7 +65,7 @@ def torch_inference_guard():
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            import torch  # noqa: F401
+            import torch
 
             with torch.inference_mode():
                 return fn(*args, **kwargs)
@@ -64,9 +76,15 @@ def torch_inference_guard():
 
 
 @torch_inference_guard()
-def generate_video_caption(frame_paths: list[str], model, processor,
-                           frames_n: int = 8, max_new_tokens: int = 220,
-                           min_words: int = 50, retries: int = 2) -> dict:
+def generate_video_caption(
+    frame_paths: list[str],
+    model,
+    processor,
+    frames_n: int = 8,
+    max_new_tokens: int = 220,
+    min_words: int = 50,
+    retries: int = 2,
+) -> dict:
     """Generate a video-level caption; retry with higher temperature if too short."""
     selected = sample_frames_in_time_order(frame_paths, k=frames_n)
     last = None
@@ -80,7 +98,9 @@ def generate_video_caption(frame_paths: list[str], model, processor,
                 ],
             }
         ]
-        inputs = processor.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True)
+        inputs = processor.apply_chat_template(
+            messages, return_tensors="pt", add_generation_prompt=True
+        )
         temperature = 0.0 if attempt == 0 else 0.7
         gen_ids = model.generate(
             inputs.to(model.device),

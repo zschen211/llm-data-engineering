@@ -38,7 +38,8 @@ def _cell_bytes(cell, fallback_url: str = "") -> bytes | None:
         data = None
     if isinstance(data, str):
         if data.startswith(("http://", "https://")):
-            with urllib.request.urlopen(data, timeout=60) as response:
+            # Deliberate dataset-driven fetch of remote image cells (B310).
+            with urllib.request.urlopen(data, timeout=60) as response:  # nosec B310
                 return response.read()
         data = None
     return data if isinstance(data, (bytes, bytearray)) else None
@@ -65,8 +66,8 @@ class ParquetProcessor(Processor):
                 columns=[image_column], batch_size=batch_size
             ):
                 column = batch.column(0)
-                for idx in range(len(column)):
-                    data = _cell_bytes(column[idx].as_py())
+                for idx, raw in enumerate(column):
+                    data = _cell_bytes(raw.as_py())
                     if not data:
                         skipped += 1
                         continue

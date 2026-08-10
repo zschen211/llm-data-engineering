@@ -4,6 +4,7 @@ The index always keeps the original page images bound to it
 (``store_collection_with_index`` equivalent), because the generation stage
 feeds the retrieved page images back into the VLM.
 """
+
 from __future__ import annotations
 
 import math
@@ -21,19 +22,24 @@ def _tokenize(text: str) -> list[str]:
 
 def byaldi_available() -> bool:
     try:
-        import byaldi  # noqa: F401
+        # availability probe for the optional gpu extra
+        import byaldi  # noqa: F401  # pylint: disable=unused-import
 
         return True
     except ImportError:
         return False
 
 
-def build_byaldi_index(pdf_path: Path, index_dir: Path, model_name: str = "vidore/colpali-v1.2") -> None:
+def build_byaldi_index(
+    pdf_path: Path, index_dir: Path, model_name: str = "vidore/colpali-v1.2"
+) -> None:
     """Visual index via Byaldi. Requires the optional ``gpu`` extra."""
     try:
         from byaldi import RAGMultiModalModel
     except ImportError as exc:
-        raise RuntimeError("visual indexing requires the optional 'gpu' extra (byaldi + colpali + torch)") from exc
+        raise RuntimeError(
+            "visual indexing requires the optional 'gpu' extra (byaldi + colpali + torch)"
+        ) from exc
     model = RAGMultiModalModel.from_pretrained(model_name)
     model.index(
         input_path=str(pdf_path),
@@ -64,13 +70,17 @@ def build_lexical_index(page_units: list[dict]) -> list[dict]:
     return pages
 
 
-def build_index(page_units_path: Path, out_path: Path, backend: str | None = None) -> dict:
+def build_index(
+    page_units_path: Path, out_path: Path, backend: str | None = None
+) -> dict:
     """Build an index; ``backend`` in {"byaldi", "lexical"}, default byaldi if available."""
     page_units = read_jsonl(page_units_path)
     if backend is None:
         backend = "byaldi" if byaldi_available() else "lexical"
     if backend == "byaldi":
-        build_byaldi_index(Path(page_units[0]["source"]), out_path.parent / out_path.stem)
+        build_byaldi_index(
+            Path(page_units[0]["source"]), out_path.parent / out_path.stem
+        )
     elif backend != "lexical":
         raise ValueError(f"unknown backend: {backend}")
     index = {

@@ -16,7 +16,8 @@ from pathlib import Path
 
 from ...log import get_logger
 from ..classify import IMAGE_SUFFIXES, classify_image
-from .downloaders.base import Candidate, image_size, sha256_of
+from ..meta.models import Source
+from .downloaders.base import Candidate, RemoteRef, image_size, sha256_of
 from .downloaders.download import DownloadStage
 from .downloaders.persist import PersistStage
 from .downloaders.ray_sync import BackendConfig, SyncConfig, run_ray_sync
@@ -42,15 +43,7 @@ class SyncService:
         Raises ValueError when the source is unknown/disabled/not huggingface
         or already has an active sync run (running or paused).
         """
-        source = self._db.get_source(source_id)
-        if source is None:
-            raise ValueError(f"unknown source: {source_id}")
-        if not source.enabled:
-            raise ValueError(f"source {source_id} is disabled")
-        if source.kind != "huggingface":
-            raise ValueError(
-                f"only the 'huggingface' source kind is supported, got {source.kind!r}"
-            )
+        self._validate_source(source_id)
         active = [
             r
             for r in self._db.list_sync_runs(limit=100)
@@ -61,6 +54,47 @@ class SyncService:
                 f"source {source_id} is already syncing (run={active[0]['id']})"
             )
         return self._db.create_sync_run(source_id)
+
+    def _validate_source(self, source_id: str) -> Source:
+        source = self._db.get_source(source_id)
+        if source is None:
+            raise ValueError(f"unknown source: {source_id}")
+        if not source.enabled:
+            raise ValueError(f"source {source_id} is disabled")
+        if source.kind != "huggingface":
+            raise ValueError(
+                f"only the 'huggingface' source kind is supported, got {source.kind!r}"
+            )
+        return source
+
+    def resume_source(self, source_id: str) -> str:
+        """Resume the latest crash-interrupted run of a source, or start a
+        fresh run when there is none. Returns the run_id to continue with.
+
+        The interrupted run keeps its per-file task table (sync_tasks), so a
+        resume continues at file granularity: files already persisted are
+        skipped, unfinished ones are re-submitted (their last-known download
+        progress stays visible until the download restarts).
+        """
+        source = self._validate_source(source_id)
+        active = [
+            r
+            for r in self._db.list_sync_runs(limit=100)
+            if r["source_id"] == source_id and r["status"] in ("running", "paused")
+        ]
+        if active:
+            raise ValueError(
+                f"source {source_id} is already syncing (run={active[0]['id']})"
+            )
+        run = self._db.get_interrupted_run(source_id)
+        if run is None:
+            return self._db.create_sync_run(source_id)
+        self._db.update_sync_run(run["id"], status="running")
+        self._db.append_sync_event(
+            run["id"], "control", "", "info", "同步已从上次中断处继续（文件级续传）"
+        )
+        logger.info("run=%s 续传开始 source=%s", run["id"], source.id)
+        return run["id"]
 
     def sync_source(
         self, source_id: str, run_id: str | None = None, hub=None
@@ -84,18 +118,18 @@ class SyncService:
         in-flight download may finish but its results are not written until
         the run is resumed.
 
+        Crash recovery: each remote file is tracked in ``sync_tasks`` (status
+        + byte progress). A run left 'running'/'paused' by a crash becomes
+        'interrupted' on the next ``Database`` open; ``resume_source`` (or a
+        direct call with the interrupted run_id) continues it at file
+        granularity — persisted files are skipped, unfinished files are
+        re-submitted, and the per-source HF cache dir (stable across runs)
+        avoids re-downloading files that were fetched but not yet persisted.
+
         ``hub`` injects a fake huggingface_hub for tests; the real client is
         huggingface_hub, installed with the project.
         """
-        source = self._db.get_source(source_id)
-        if source is None:
-            raise ValueError(f"unknown source: {source_id}")
-        if not source.enabled:
-            raise ValueError(f"source {source_id} is disabled")
-        if source.kind != "huggingface":
-            raise ValueError(
-                f"only the 'huggingface' source kind is supported, got {source.kind!r}"
-            )
+        source = self._validate_source(source_id)
         if run_id is None:
             run_id = self.start_sync(source_id)
 
@@ -104,7 +138,6 @@ class SyncService:
         stage = DownloadStage.from_source(source, hub=hub)
         report = SyncReport(source_id=source.id, source_kind=source.kind)
         total_remotes = 0
-        processed_remotes = 0
 
         def event(stage: str, message: str, level: str = "info") -> None:
             self._db.append_sync_event(run_id, stage, "", level, message)
@@ -112,58 +145,34 @@ class SyncService:
             logger.info("run=%s stage=%s %s", run_id, stage, message)
 
         try:
+            self._resume_if_interrupted(run_id)
             logger.info("run=%s 同步开始 source=%s", run_id, source_id)
             event("resolve", "解析文件清单…")
             remotes = stage.resolve()
             total_remotes = len(remotes)
             report.resolved = total_remotes
             self._db.update_sync_run(run_id, total_files=total_remotes)
-            event("resolve", f"解析完成：{total_remotes} 个文件")
             if not remotes:
                 self._db.update_sync_run(run_id, status="done", progress=100.0)
                 event("done", "没有需要下载的文件")
                 return report
 
-            cfg = SyncConfig(
-                db_path=str(self._db.path),
-                backend=BackendConfig.from_backend(self.backend),
-                tmp_dir=str(self.tmp_dir),
-                source=source,
-                run_id=run_id,
-                workers=max(1, int(source.params.get("workers", 2))),
-                attempts=int(source.params.get("attempts", 3)),
-                hub=hub,
-            )
-            for outcome in run_ray_sync(
-                cfg, remotes, paused=lambda: self._run_paused(run_id)
+            to_sync, skipped_files = self._plan_sync(run_id, remotes, event)
+            cfg = self._sync_config(source, run_id, hub)
+            failed_files = 0
+            for processed_remotes, outcome in enumerate(
+                run_ray_sync(cfg, to_sync, paused=lambda: self._run_paused(run_id)),
+                start=1,
             ):
-                report.new += outcome.new
-                report.skipped_existing += outcome.skipped
-                for error in outcome.errors:
-                    report.failed += 1
-                    report.errors.append(f"{outcome.remote}: {error}")
-                processed_remotes += 1
-                self._db.update_sync_run(
+                failed_files += self._record_outcome(report, outcome)
+                self._apply_progress(
                     run_id,
-                    done_files=report.new + report.skipped_existing,
-                    failed_files=report.failed,
-                    current_stage="",
-                    current_file="",
-                    progress=round(processed_remotes / total_remotes * 100, 1),
+                    processed_remotes,
+                    failed_files,
+                    skipped_files,
+                    total_remotes,
                 )
-
-            self._db.update_sync_run(run_id, status="done", progress=100.0)
-            event(
-                "done",
-                f"同步完成：新增 {report.new}，跳过 {report.skipped_existing}，失败 {report.failed}",
-            )
-            logger.info(
-                "run=%s 同步完成 new=%s skipped=%s failed=%s",
-                run_id,
-                report.new,
-                report.skipped_existing,
-                report.failed,
-            )
+            self._finish_sync(run_id, report, event)
         except Exception as exc:
             self._db.update_sync_run(run_id, status="failed", error=str(exc))
             self._db.append_sync_event(run_id, "error", "", "error", f"同步失败: {exc}")
@@ -171,11 +180,121 @@ class SyncService:
             raise
         return report
 
+    def _resume_if_interrupted(self, run_id: str) -> None:
+        """Turn an interrupted run back into 'running' at the start of sync."""
+        run = self._db.get_sync_run(run_id)
+        if run is None:
+            raise ValueError(f"unknown sync run: {run_id}")
+        if run["status"] == "interrupted":
+            self._db.update_sync_run(run_id, status="running")
+
+    def _plan_sync(
+        self, run_id: str, remotes: list[RemoteRef], event
+    ) -> tuple[list[RemoteRef], int]:
+        """Register/reconcile tasks and return (to_sync, skipped_files)."""
+        total = len(remotes)
+        inserted = self._db.create_sync_tasks(run_id, remotes)
+        if inserted:
+            event("resolve", f"解析完成：{total} 个文件，登记 {inserted} 个新任务")
+        else:
+            event("resolve", f"解析完成：{total} 个文件，续传 {total} 个已有任务")
+        self._db.reconcile_sync_tasks(run_id, {r.id for r in remotes})
+        tasks = self._db.get_sync_tasks(run_id)
+        task_status = {t["remote_id"]: t["status"] for t in tasks}
+        to_sync = [
+            r
+            for r in remotes
+            if task_status.get(r.id, "pending") not in ("persisted", "skipped")
+        ]
+        skipped_files = total - len(to_sync)
+        if skipped_files:
+            event("resolve", f"{skipped_files} 个文件已持久化，跳过（断点续传）")
+        return to_sync, skipped_files
+
+    def _sync_config(self, source: Source, run_id: str, hub) -> SyncConfig:
+        return SyncConfig(
+            db_path=str(self._db.path),
+            backend=BackendConfig.from_backend(self.backend),
+            tmp_dir=str(self.tmp_dir),
+            source=source,
+            run_id=run_id,
+            workers=max(1, int(source.params.get("workers", 2))),
+            attempts=int(source.params.get("attempts", 3)),
+            hub=hub,
+            cache_dir=str(
+                self.data_dir / "hf_cache" / source.params.get("repo_id", "repo")
+            ),
+        )
+
+    def _record_outcome(self, report: SyncReport, outcome) -> int:
+        """Fold one Ray task outcome into the report; 1 when the task failed."""
+        report.new += outcome.new
+        report.skipped_existing += outcome.skipped
+        for error in outcome.errors:
+            report.failed += 1
+            report.errors.append(f"{outcome.remote}: {error}")
+        return int(outcome.failed)
+
+    def _apply_progress(
+        self,
+        run_id: str,
+        processed_remotes: int,
+        failed_files: int,
+        skipped_files: int,
+        total_remotes: int,
+    ) -> None:
+        completed = processed_remotes - failed_files + skipped_files
+        self._db.update_sync_run(
+            run_id,
+            done_files=completed,
+            failed_files=failed_files,
+            current_stage="",
+            current_file="",
+            progress=round(completed / total_remotes * 100, 1),
+        )
+
+    def _finish_sync(self, run_id: str, report: SyncReport, event) -> None:
+        tasks = self._db.get_sync_tasks(run_id)
+        done_files = sum(1 for t in tasks if t["status"] in ("persisted", "skipped"))
+        failed_files = sum(1 for t in tasks if t["status"] == "failed")
+        self._db.update_sync_run(
+            run_id,
+            status="done",
+            progress=100.0,
+            done_files=done_files,
+            failed_files=failed_files,
+        )
+        event(
+            "done",
+            f"同步完成：新增 {report.new}，跳过 {report.skipped_existing}，失败 {report.failed}",
+        )
+        logger.info(
+            "run=%s 同步完成 new=%s skipped=%s failed=%s",
+            run_id,
+            report.new,
+            report.skipped_existing,
+            report.failed,
+        )
+
     def get_sync_run(self, run_id: str) -> dict | None:
         return self._db.get_sync_run(run_id)
 
     def get_running_run(self, source_id: str) -> dict | None:
         return self._db.get_running_run(source_id)
+
+    def get_interrupted_run(self, source_id: str) -> dict | None:
+        return self._db.get_interrupted_run(source_id)
+
+    def get_sync_tasks(self, run_id: str) -> list[dict]:
+        return self._db.get_sync_tasks(run_id)
+
+    def get_sync_tasks_page(
+        self, run_id: str, offset: int = 0, limit: int = 20
+    ) -> list[dict]:
+        return self._db.get_sync_tasks_page(run_id, offset=offset, limit=limit)
+
+    def count_sync_tasks(self, run_id: str) -> int:
+        return self._db.count_sync_tasks(run_id)
 
     def get_sync_events(
         self, run_id: str, after_id: int = 0, limit: int = 200
@@ -258,30 +377,7 @@ class SyncService:
             if not (file_path.is_file() and file_path.suffix.lower() in IMAGE_SUFFIXES):
                 continue
             report.resolved += 1
-            width, height = image_size(file_path) or (None, None)
-            candidate = Candidate(
-                name=file_path.name,
-                path=str(file_path),
-                sha256=sha256_of(file_path),
-                size=file_path.stat().st_size,
-                ext=file_path.suffix.lower() or ".bin",
-                asset_type=classify_image(file_path, labels),
-                width=width,
-                height=height,
-                meta={"labels": (labels or {}).get(file_path.name, {})},
-            )
-            try:
-                outcome = persister.persist_one(source, candidate)
-                if outcome == "new":
-                    report.new += 1
-                else:
-                    report.skipped_existing += 1
-            except Exception as exc:
-                report.failed += 1
-                report.errors.append(f"{file_path.name}: {exc}")
-                self._db.record_download(
-                    file_path.name, source.kind, "failed", str(exc)
-                )
+            self._import_one(persister, source, file_path, labels, report)
         self._db.update_sync_run(
             run_id,
             status="done",
@@ -305,3 +401,35 @@ class SyncService:
             report.failed,
         )
         return report
+
+    def _import_one(
+        self,
+        persister: PersistStage,
+        source: Source,
+        file_path: Path,
+        labels: dict[str, str] | None,
+        report: SyncReport,
+    ) -> None:
+        """Persist one local file into the store and tally the outcome."""
+        width, height = image_size(file_path) or (None, None)
+        candidate = Candidate(
+            name=file_path.name,
+            path=str(file_path),
+            sha256=sha256_of(file_path),
+            size=file_path.stat().st_size,
+            ext=file_path.suffix.lower() or ".bin",
+            asset_type=classify_image(file_path, labels),
+            width=width,
+            height=height,
+            meta={"labels": (labels or {}).get(file_path.name, {})},
+        )
+        try:
+            outcome = persister.persist_one(source, candidate)
+            if outcome == "new":
+                report.new += 1
+            else:
+                report.skipped_existing += 1
+        except Exception as exc:
+            report.failed += 1
+            report.errors.append(f"{file_path.name}: {exc}")
+            self._db.record_download(file_path.name, source.kind, "failed", str(exc))

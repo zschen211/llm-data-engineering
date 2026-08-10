@@ -9,15 +9,21 @@ from mm_rag.schema import write_jsonl
 def _page_units():
     return [
         {
-            "page_id": "p0001", "page_no": 1, "image_path": "pages/page_0001.png",
+            "page_id": "p0001",
+            "page_no": 1,
+            "image_path": "pages/page_0001.png",
             "text": "Table of contents Chapter 1 Chapter 2 Research development Financial overview",
         },
         {
-            "page_id": "p0002", "page_no": 2, "image_path": "pages/page_0002.png",
+            "page_id": "p0002",
+            "page_no": 2,
+            "image_path": "pages/page_0002.png",
             "text": "Revenue increased 20 percent year over year to 200 million.",
         },
         {
-            "page_id": "p0003", "page_no": 3, "image_path": "pages/page_0003.png",
+            "page_id": "p0003",
+            "page_no": 3,
+            "image_path": "pages/page_0003.png",
             "text": "Research and development spending rose from 100 million to 150 million.",
         },
     ]
@@ -32,7 +38,9 @@ def lex_index(tmp_path):
 
 def test_build_lexical_index_requires_page_units(tmp_path):
     write_jsonl(tmp_path / "page_units.jsonl", _page_units())
-    idx = index.build_index(tmp_path / "page_units.jsonl", tmp_path / "index.json", backend="lexical")
+    idx = index.build_index(
+        tmp_path / "page_units.jsonl", tmp_path / "index.json", backend="lexical"
+    )
     assert idx["backend"] == "lexical"
     assert idx["n_pages"] == 3
     assert len(idx["pages"]) == 3
@@ -51,7 +59,9 @@ def test_retrieve_filters_directory_page(lex_index):
 
 
 def test_retrieve_no_filter_keeps_directory(lex_index):
-    results = retrieve.retrieve(lex_index, "financial overview", top_k=4, filter_directory=False)
+    results = retrieve.retrieve(
+        lex_index, "financial overview", top_k=4, filter_directory=False
+    )
     assert any(r["page_no"] == 1 for r in results)
 
 
@@ -91,12 +101,27 @@ def test_answer_unknown_backend():
 
 def test_evaluate_metrics(lex_index):
     evalset = [
-        {"question": "research and development spending trend", "relevant_pages": [3], "is_directory_page": False},
-        {"question": "revenue increase", "relevant_pages": [2], "is_directory_page": False},
-        {"question": "table of contents", "relevant_pages": [], "is_directory_page": True},
+        {
+            "question": "research and development spending trend",
+            "relevant_pages": [3],
+            "is_directory_page": False,
+        },
+        {
+            "question": "revenue increase",
+            "relevant_pages": [2],
+            "is_directory_page": False,
+        },
+        {
+            "question": "table of contents",
+            "relevant_pages": [],
+            "is_directory_page": True,
+        },
     ]
     results = [
-        {"question": item["question"], "retrieved": retrieve.retrieve(lex_index, item["question"], top_k=4)}
+        {
+            "question": item["question"],
+            "retrieved": retrieve.retrieve(lex_index, item["question"], top_k=4),
+        }
         for item in evalset
     ]
     report = evaluate.evaluate(results, evalset, top_k=4)

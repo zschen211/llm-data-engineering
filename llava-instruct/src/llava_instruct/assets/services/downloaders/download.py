@@ -90,6 +90,8 @@ def _progress_tqdm_class(
                 remote=self._remote,
                 message=message,
                 fraction=self.n / self.total if self.total else None,
+                n=self.n,
+                total=self.total,
             )
 
     return _ProgressTqdm
@@ -143,7 +145,7 @@ class DownloadStage:
                 continue
             remotes.append(
                 RemoteRef(
-                    id=f"hf_{hashlib.sha1(path.encode('utf-8')).hexdigest()[:12]}",
+                    id=f"hf_{hashlib.sha1(path.encode('utf-8'), usedforsecurity=False).hexdigest()[:12]}",
                     name=Path(path).name,
                     path_in_repo=path,
                     meta={
@@ -156,9 +158,20 @@ class DownloadStage:
         return remotes
 
     def download(
-        self, remote: RemoteRef, target: Path, on_event: Callable | None = None
+        self,
+        remote: RemoteRef,
+        target: Path,
+        on_event: Callable | None = None,
+        cache_dir: Path | None = None,
     ) -> Path:
-        """Fetch one file to ``target`` with retry + backoff."""
+        """Fetch one file to ``target`` with retry + backoff.
+
+        ``cache_dir`` is the stable HF cache location for the whole source
+        (never deleted between runs): huggingface_hub's local_dir mode skips
+        files it already has (metadata commit_hash match), so completed
+        downloads are reused across runs and after a crash. When None, the
+        old per-task location (``target.parent/.hf_cache``) is used.
+        """
         hub = self._hub()
         last_error: Exception | None = None
         tqdm_class = _progress_tqdm_class(on_event, remote.name) if on_event else None
@@ -168,7 +181,7 @@ class DownloadStage:
                     self.repo_id,
                     remote.path_in_repo,
                     repo_type=self.repo_type,
-                    local_dir=str(target.parent / ".hf_cache"),
+                    local_dir=str(cache_dir or target.parent / ".hf_cache"),
                     tqdm_class=tqdm_class,
                 )
                 shutil.copyfile(cached, target)

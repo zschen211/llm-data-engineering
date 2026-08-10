@@ -1,4 +1,5 @@
 """Final manifest: join all stages on shot_id and validate the sample contract."""
+
 from __future__ import annotations
 
 from pathlib import Path

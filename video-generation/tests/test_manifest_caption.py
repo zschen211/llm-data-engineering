@@ -29,19 +29,35 @@ def test_build_manifest_joins_on_shot_id(tmp_path):
     shot_lang = tmp_path / "shot_language.jsonl"
     out = tmp_path / "final.jsonl"
 
-    sources.write_text('{"video_id": 1, "license": "pexels", "page_url": "https://x"}\n')
+    sources.write_text(
+        '{"video_id": 1, "license": "pexels", "page_url": "https://x"}\n'
+    )
     scenes.write_text(
         '{"shot_id": "pexels_1_shot_0000", "video_id": 1, "start_ts": 0.0, "end_ts": 2.0, '
         '"segment_path": "shots/pexels_1/shot_0000.mp4", "status": "ok"}\n'
     )
-    motion_path.write_text('{"shot_id": "pexels_1_shot_0000", "motion_strength": 1.3, "pass_motion": true}\n')
-    aesthetic_path.write_text('{"shot_id": "pexels_1_shot_0000", "aesthetic_score": 6.2, "pass_aesthetic": true}\n')
-    captions_path.write_text('{"shot_id": "pexels_1_shot_0000", "caption_en": "A person walks down a street.", "n_words": 8}\n')
-    shot_lang.write_text('{"shot_id": "pexels_1_shot_0000", "camera_motion": "pan_right", "status": "ok"}\n')
+    motion_path.write_text(
+        '{"shot_id": "pexels_1_shot_0000", "motion_strength": 1.3, "pass_motion": true}\n'
+    )
+    aesthetic_path.write_text(
+        '{"shot_id": "pexels_1_shot_0000", "aesthetic_score": 6.2, "pass_aesthetic": true}\n'
+    )
+    captions_path.write_text(
+        '{"shot_id": "pexels_1_shot_0000", "caption_en": "A person walks down a street.", "n_words": 8}\n'
+    )
+    shot_lang.write_text(
+        '{"shot_id": "pexels_1_shot_0000", "camera_motion": "pan_right", "status": "ok"}\n'
+    )
 
     samples = manifest.build_manifest(
-        {"source": sources, "scenes": scenes, "motion": motion_path,
-         "aesthetic": aesthetic_path, "captions": captions_path, "shot_language": shot_lang},
+        {
+            "source": sources,
+            "scenes": scenes,
+            "motion": motion_path,
+            "aesthetic": aesthetic_path,
+            "captions": captions_path,
+            "shot_language": shot_lang,
+        },
         out,
     )
     assert len(samples) == 1

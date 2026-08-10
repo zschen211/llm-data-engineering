@@ -20,7 +20,7 @@ class S3StorageBackend(StorageBackend):
 
     name = "s3"
 
-    def __init__(
+    def __init__(  # nosec B107: empty placeholder defaults; real creds from env
         self,
         endpoint_url: str | None = None,
         access_key: str = "",

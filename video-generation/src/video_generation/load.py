@@ -4,11 +4,15 @@ Reads ``pexels_manifest.jsonl`` (or recovers minimal records from
 ``pexels_*.mp4`` filenames), re-probes each file with ffprobe and writes
 ``source_videos.jsonl`` with resume support.
 """
+
 from __future__ import annotations
 
 import json
 import re
-import subprocess
+
+# B404: bounded ffprobe invocations only (list args, no shell); ffprobe is
+# resolved from PATH by design.
+import subprocess  # nosec B404
 from pathlib import Path
 
 from .io import SafeJsonlWriter, read_jsonl, scan_done_ids
@@ -34,8 +38,24 @@ def ffprobe(path: Path) -> dict | None:
     """Probe duration/fps/size via ffprobe; None when ffprobe is unavailable."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
-            capture_output=True, text=True, timeout=60,
+            # B607: PATH-resolved ffprobe is intended (system tool, not a
+            # partial relative path)
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(path),
+            ],  # nosec B607
+            # B603: shell=False is explicit; args are a literal list
+            capture_output=True,
+            text=True,
+            timeout=60,
+            shell=False,  # nosec B603
+            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -45,7 +65,9 @@ def ffprobe(path: Path) -> dict | None:
         data = json.loads(result.stdout)
     except ValueError:
         return None
-    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    video = next(
+        (s for s in data.get("streams", []) if s.get("codec_type") == "video"), None
+    )
     fmt = data.get("format", {})
     if not video:
         return None
@@ -84,9 +106,14 @@ def _iter_manifest(src_dir: Path) -> list[dict]:
     ]
 
 
-def load_source_videos(src_dir: Path, out_path: Path, max_samples: int | None = None) -> list[dict]:
+def load_source_videos(
+    src_dir: Path, out_path: Path, max_samples: int | None = None
+) -> list[dict]:
     """Scan + probe videos into source_videos.jsonl; skip ids already written."""
-    done = {str(v) for v in (scan_done_ids(out_path, "video_id") if out_path.exists() else set())}
+    done = {
+        str(v)
+        for v in (scan_done_ids(out_path, "video_id") if out_path.exists() else set())
+    }
     written = 0
     with SafeJsonlWriter(out_path) as writer:
         for raw in _iter_manifest(src_dir):
@@ -95,13 +122,26 @@ def load_source_videos(src_dir: Path, out_path: Path, max_samples: int | None = 
                 continue
             if max_samples is not None and written >= max_samples:
                 break
-            video_path = src_dir / raw["saved_as"] if raw.get("saved_as") else src_dir / f"pexels_{video_id}.mp4"
-            if not video_path.exists():
+            record = _probe_video_record(raw, src_dir)
+            if record is None:
                 continue
-            info = ffprobe(video_path)
-            if info is None:
-                continue
-            writer.append(normalize_video_record(raw, video_path, info))
+            writer.append(record)
             done.add(video_id)
             written += 1
     return read_jsonl(out_path) if out_path.exists() else []
+
+
+def _probe_video_record(raw: dict, src_dir: Path) -> dict | None:
+    """Probe one manifest record; None when the file or ffprobe is missing."""
+    video_id = raw["video_id"]
+    video_path = (
+        src_dir / raw["saved_as"]
+        if raw.get("saved_as")
+        else src_dir / f"pexels_{video_id}.mp4"
+    )
+    if not video_path.exists():
+        return None
+    info = ffprobe(video_path)
+    if info is None:
+        return None
+    return normalize_video_record(raw, video_path, info)
