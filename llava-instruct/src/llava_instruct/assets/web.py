@@ -1,11 +1,13 @@
-"""FastAPI management UI for the asset layer (optional ``web`` extra).
+"""FastAPI management UI for the asset layer.
 
-Endpoints: sources CRUD, asset listing/filtering, tagging, snapshots, sync
-trigger and image preview (streamed from the storage backend).
+Endpoints: sources CRUD, asset listing/filtering, tagging, snapshots, image
+preview, async sync runs (202 + polling, pause/resume control) and sync
+history.
 """
 from __future__ import annotations
 
 import mimetypes
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -13,7 +15,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..log import get_logger
+from .api import open_store
 from .store import AssetStore
+
+logger = get_logger("assets.web")
 
 WEBUI_PATH = Path(__file__).with_name("webui.html")
 try:
@@ -53,21 +59,26 @@ def create_app(store: AssetStore) -> FastAPI:
 
     @app.get("/api/info")
     def info():
-        assets = store.list_assets()
         return {
             "backend": store.backend_name,
             "bucket": getattr(store.backend, "bucket", None),
+            "data_dir": str(store.data_dir),
+            "db_path": str(store.db_path),
             "source_count": len(store.list_sources()),
-            "asset_count": len(assets),
-            "ready_count": sum(1 for a in assets if a.status == "ready"),
-            "failed_count": sum(1 for a in assets if a.status == "failed"),
+            "asset_count": store.count_assets(),
+            "ready_count": store.count_assets(status="ready"),
+            "failed_count": store.count_assets(status="failed"),
             "snapshot_count": len(store.list_snapshots()),
         }
 
     # ------------------------------------------------------------- sources
     @app.get("/api/sources")
     def list_sources():
-        return [asdict(s) for s in store.list_sources()]
+        """Sources with their currently-running sync run id (None when idle)."""
+        return [
+            {**asdict(s), "running_run_id": (store.get_running_run(s.id) or {}).get("id")}
+            for s in store.list_sources()
+        ]
 
     @app.post("/api/sources", status_code=201)
     def add_source(body: SourceIn):
@@ -87,26 +98,79 @@ def create_app(store: AssetStore) -> FastAPI:
     def delete_source(source_id: str):
         store.delete_source(source_id)
 
-    @app.post("/api/sources/{source_id}/sync")
+    @app.post("/api/sources/{source_id}/sync", status_code=202)
     def sync_source(source_id: str):
-        from dataclasses import asdict as _ad
-
+        """Start a sync run in the background; poll /api/sync/{run_id}."""
         try:
-            return _ad(store.sync_source(source_id))
-        except Exception as exc:
+            run_id = store.start_sync(source_id)
+        except ValueError as exc:
+            if "already syncing" in str(exc):
+                raise HTTPException(409, str(exc))
             raise HTTPException(400, str(exc))
+
+        def _run():
+            try:
+                store.sync_source(source_id, run_id=run_id)
+            except Exception as exc:
+                logger.error("background sync run=%s failed: %s", run_id, exc)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"run_id": run_id}
+
+    # ---------------------------------------------------------------- sync
+    @app.get("/api/sync/runs")
+    def list_sync_runs(limit: int = Query(default=20, le=200)):
+        return store.list_sync_runs(limit=limit)
+
+    @app.get("/api/sync/{run_id}")
+    def get_sync_run(run_id: str):
+        run = store.get_sync_run(run_id)
+        if run is None:
+            raise HTTPException(404, "sync run not found")
+        return run
+
+    @app.post("/api/sync/{run_id}/pause")
+    def pause_sync(run_id: str):
+        try:
+            return store.pause_sync(run_id)
+        except ValueError as exc:
+            raise HTTPException(404 if store.get_sync_run(run_id) is None else 400, str(exc))
+
+    @app.post("/api/sync/{run_id}/resume")
+    def resume_sync(run_id: str):
+        try:
+            return store.resume_sync(run_id)
+        except ValueError as exc:
+            raise HTTPException(404 if store.get_sync_run(run_id) is None else 400, str(exc))
+
+    @app.get("/api/sync/{run_id}/events")
+    def get_sync_events(run_id: str, after: int = 0, limit: int = Query(default=200, le=1000)):
+        return store.get_sync_events(run_id, after_id=after, limit=limit)
+
+    @app.post("/api/backup", status_code=201)
+    def backup_db():
+        """Create a consistent metadata-db backup (online backup API)."""
+        path = store.backup_db()
+        return {"path": str(path), "assets": store.count_assets()}
 
     # -------------------------------------------------------------- assets
     @app.get("/api/assets")
     def list_assets(type: str | None = None, status: str | None = None,
-                    source: str | None = None, tag: str | None = Query(default=None)):
-        tags = [tag] if tag else None
-        assets = store.list_assets(asset_type=type, status=status,
-                                   source_id=source, tags=tags)
-        return [
-            {**asdict(a), "tags": a.tags}
-            for a in assets
-        ]
+                    source: str | None = None, tag: str | None = None,
+                    q: str | None = None, cursor: str | None = None,
+                    page_size: int = Query(default=50, ge=1, le=200)):
+        """Cursor-paginated assets: {"items", "next_cursor", "page_size"}.
+
+        Use the returned next_cursor as the cursor param for the next page;
+        filters and search are evaluated server-side (SQL).
+        """
+        try:
+            return store.list_assets_page(
+                asset_type=type, status=status, source_id=source,
+                tags=[tag] if tag else None, q=q, cursor=cursor, page_size=page_size,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get("/api/assets/{asset_id}")
     def get_asset(asset_id: str):
@@ -170,6 +234,4 @@ def create_app(store: AssetStore) -> FastAPI:
 
 def default_app(data_dir: Path | None = None) -> FastAPI:
     """Build an app wired to the default store (env-configured backend)."""
-    from .api import open_store
-
     return create_app(open_store(data_dir=data_dir))

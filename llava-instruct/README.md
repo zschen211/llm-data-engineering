@@ -7,9 +7,7 @@ LLaVA 多模态指令数据工厂：把多模态资产（通用/文档/图表图
 ## 安装与运行
 
 ```bash
-uv sync --extra dev               # 基础 + 测试（本地存储后端）
-uv sync --extra dev --extra rustfs --extra hf   # + RustFS(S3) 后端与 HF 下载器
-uv sync --extra web               # + Web 管理界面
+uv sync --extra dev               # 基础 + 测试（所有运行时依赖均为核心依赖，自动安装）
 uv run pytest
 
 # 1. 从图片目录构建均衡资产池（按文件名 doc_*/chart_* 启发式分类，可用 --labels 指定）
@@ -56,13 +54,13 @@ uv run llava-instruct asset init                                  # 查看/校�
 uv run llava-instruct asset source add --name coco --kind huggingface \
   --params '{"repo_id": "org/ds", "process": "parquet"}'     # process=file|parquet
 uv run llava-instruct asset source list
-uv run llava-instruct asset sync <source_id>                      # 下载管线：并行下载+重试+转换+入库（幂等）
+uv run llava-instruct asset sync <source_id>                      # 下载管线：Ray 并行任务+重试+转换+入库（幂等）
 uv run llava-instruct asset import ./images --out assets.jsonl    # 本地导入（等效 prepare-assets）
 uv run llava-instruct asset ls --tag task=chart --type chart_image
 uv run llava-instruct asset tag add <asset_id> chart --group task
 uv run llava-instruct asset version snapshot --name v1            # 集合级快照（可复现）
 uv run llava-instruct asset materialize ./pool --tag task=chart   # 物化到本地供下游流水线
-uv run llava-instruct asset serve --port 8000                     # Web 管理界面（需 --extra web）
+uv run llava-instruct asset serve --port 8000                     # Web 管理界面
 ```
 
 ## 统一对外 API
@@ -112,7 +110,7 @@ llava-instruct/
 │   │   ├── db.py            # SQLite 元数据（八表：sources/assets/versions/tags/downloads/snapshots）
 │   │   ├── storage.py       # StorageBackend：LocalStorage / S3Storage(RustFS)
 │   │   ├── registry.py      # 下载器注册表
-│   │   ├── downloaders/     # local / http / huggingface 下载器
+│   │   ├── downloaders/     # download->process->persist 三段管线 + ray_sync（Ray 任务编排）
 │   │   ├── store.py         # AssetStore 门面（sync 状态机/标签/版本/快照/物化）
 │   │   └── web.py           # FastAPI 管理界面
 │   ├── templates.py         # 受控任务模板与 LLaVA conversation 构建

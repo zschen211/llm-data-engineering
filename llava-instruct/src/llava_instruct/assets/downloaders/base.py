@@ -12,6 +12,8 @@ import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from PIL import Image
+
 
 @dataclass
 class RemoteRef:
@@ -49,8 +51,6 @@ def sha256_of(path: Path) -> str:
 def image_size(path: Path) -> tuple[int, int] | None:
     """Return (width, height) for image files; None when not decodable."""
     try:
-        from PIL import Image
-
         with Image.open(path) as img:
             return img.width, img.height
     except Exception:

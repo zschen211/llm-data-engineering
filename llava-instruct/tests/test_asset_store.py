@@ -1,8 +1,15 @@
 from pathlib import Path
 
+import io
+
+import pyarrow as pa
+
+import pyarrow.parquet as pq
+
 import pytest
 from PIL import Image
 
+from fakehub import FailingHub, FakeHub
 from llava_instruct.assets.store import AssetStore
 from llava_instruct.assets.storage import LocalStorageBackend
 
@@ -45,23 +52,12 @@ def test_import_dir_end_to_end(tmp_path):
         assert all(a.object_key.startswith("blobs/") for a in assets)
 
 
-def test_sync_failure_recorded(tmp_path, monkeypatch):
-    class FailingHub:
-        def list_repo_files(self, repo_id, repo_type="dataset"):
-            return ["data/nope.png"]
-
-        def hf_hub_download(self, repo_id, filename, repo_type="dataset", local_dir=None):
-            raise RuntimeError("connection reset")
-
-    monkeypatch.setattr(
-        "llava_instruct.assets.downloaders.download._require_hub",
-        lambda: FailingHub(),
-    )
+def test_sync_failure_recorded(tmp_path, ray_runtime):
     store = make_store(tmp_path)
     with store:
         store.add_source("hf-bad", "huggingface", params={"repo_id": "org/bad"})
         source = store.list_sources()[0]
-        report = store.sync_source(source.id)
+        report = store.sync_source(source.id, hub=FailingHub(files=["data/nope.png"]))
         assert report.failed == 1
         assert any("nope.png" in e for e in report.errors)
         rows = store.list_downloads()
@@ -130,13 +126,9 @@ def test_delete_source_cascades(tmp_path):
         assert store.count_assets() == 0
 
 
-def test_sync_parquet_processor_end_to_end(tmp_path, monkeypatch):
+def test_sync_parquet_processor_end_to_end(tmp_path, ray_runtime):
     """huggingface source + process=parquet: parquet decoded into image assets."""
-    pytest.importorskip("pyarrow")
-    import io
 
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     images = []
     for i in range(3):
@@ -149,28 +141,14 @@ def test_sync_parquet_processor_end_to_end(tmp_path, monkeypatch):
         parquet,
     )
 
-    class ParquetHub:
-        def list_repo_files(self, repo_id, repo_type="dataset"):
-            return ["data/val.parquet"]
-
-        def hf_hub_download(self, repo_id, filename, repo_type="dataset", local_dir=None):
-            target = Path(local_dir) / filename
-            target.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-
-            shutil.copyfile(parquet, target)
-            return target
-
-    monkeypatch.setattr(
-        "llava_instruct.assets.downloaders.download._require_hub",
-        lambda: ParquetHub(),
-    )
+    hub = FakeHub(files=["data/val.parquet"],
+                  copies={"data/val.parquet": str(parquet)})
     store = make_store(tmp_path)
     with store:
         store.add_source("coco", "huggingface",
                          params={"repo_id": "org/coco", "process": "parquet"})
         source = store.list_sources()[0]
-        report = store.sync_source(source.id)
+        report = store.sync_source(source.id, hub=hub)
         assert report.new == 3
         assert report.failed == 0
 
@@ -179,7 +157,7 @@ def test_sync_parquet_processor_end_to_end(tmp_path, monkeypatch):
         assert all(a.asset_type == "general_image" for a in assets)
         assert all(a.width is not None and a.height is not None for a in assets)
 
-        report2 = store.sync_source(source.id)  # dedup by sha256
+        report2 = store.sync_source(source.id, hub=hub)  # dedup by sha256
         assert report2.new == 0
         assert report2.skipped_existing == 3
 

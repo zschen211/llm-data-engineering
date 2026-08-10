@@ -9,6 +9,10 @@ import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
+
 KEY_PREFIX = "blobs"
 
 
@@ -79,10 +83,11 @@ class S3StorageBackend(StorageBackend):
     def __init__(self, endpoint_url: str | None = None, access_key: str = "",
                  secret_key: str = "", bucket: str = "llava-assets",
                  region: str = "us-east-1"):
-        import boto3
-        from botocore.client import Config
-
+        self.endpoint_url = endpoint_url
+        self.access_key = access_key
+        self.secret_key = secret_key
         self.bucket = bucket
+        self.region = region
         client_kwargs = dict(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
@@ -95,8 +100,6 @@ class S3StorageBackend(StorageBackend):
         self._ensure_bucket()
 
     def _ensure_bucket(self) -> None:
-        from botocore.exceptions import ClientError
-
         try:
             self.client.head_bucket(Bucket=self.bucket)
         except ClientError:
@@ -115,8 +118,6 @@ class S3StorageBackend(StorageBackend):
         return target
 
     def exists(self, object_key: str) -> bool:
-        from botocore.exceptions import ClientError
-
         try:
             self.client.head_object(Bucket=self.bucket, Key=object_key)
             return True

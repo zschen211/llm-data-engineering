@@ -156,8 +156,8 @@ snapshot_assets (snapshot_id TEXT REFERENCES snapshots(id),
 ```
 DownloadStage ──► Processor ──► PersistStage
   resolve 文件清单    下载文件→资产候选      候选→存储层+元数据索引
-  并行下载(workers)   "file"=原样         内容寻址去重(sha256)
-  重试(attempts)      "parquet"=逐行解码   登记 assets + downloads
+  单文件拉取(重试)    "file"=原样         内容寻址去重(sha256)
+  attempts           "parquet"=逐行解码   登记 assets + downloads
 ```
 
 **数据契约**：
@@ -175,32 +175,39 @@ class Candidate:     # process 的输出/persist 的输入
 
 **DownloadStage**（`downloaders/download.py`，网络密集型，仅 HF）：
 - `resolve()`：枚举仓库文件（`subfolder`/`allow_patterns`/`ignore_patterns` 过滤）
-- `download()`：单文件拉取，指数退避重试（`attempts`，默认 3）
-- `fetch_all()`：跨文件并行下载（`workers`，默认 2）
-- 依赖 `hf` extra（huggingface_hub）
+- `download()`：单文件拉取，指数退避重试（`attempts`，默认 3），tqdm 字节进度回调
+- `hub=` 参数可注入测试桩（生产默认 huggingface_hub，核心依赖）
 
 **Processor**（`downloaders/process.py` + `processors/`，按 `params.process` 注册表选择）：
 
 | name | 实现 | 转换逻辑 |
 | --- | --- | --- |
 | `file`（默认） | FileProcessor | 下载文件即资产（identity），`asset_type` 参数或文件名启发式分类 |
-| `parquet` | ParquetProcessor | 逐行解码 parquet 中的图片（HF Image 特征，流式批量读取），坏行跳过，处理后删除 parquet 释放磁盘；依赖 `parquet` extra（pyarrow） |
+| `parquet` | ParquetProcessor | 逐行解码 parquet 中的图片（HF Image 特征，流式批量读取），坏行跳过，处理后删除 parquet 释放磁盘 |
 
 **PersistStage**（`downloaders/persist.py`，唯一触碰存储层的阶段）：
 - `persist_one()`：`backend.put_file`（内容寻址去重）→ sha256 查重 → 登记 `assets`（version=1）+ `downloads`，返回 `new`/`skipped`
+- 读-去重-插入在 `db.transaction()`（`BEGIN IMMEDIATE`）内执行：跨进程/跨线程的写者在此串行化，sha256 去重无竞态
 - `persist()`：批量执行并收集单候选错误（不拖垮整批）
 
 **本地目录导入**（`store.import_dir`）不走网络管线：直接扫描目录 → 分类 → 构造 Candidate → 交给 PersistStage，作为 store 级便捷 API 保留。
 
-### sync 流程（状态机）
+### sync 流程（Ray 逐文件任务）
+
+**执行模型**：`ray_sync.run_ray_sync` 为每个文件提交一个 Ray 任务（独立进程），`workers` 个任务构成滑动窗口在途执行——某文件下载完成立即进入 process/persist，**不等其他文件**（`ray.wait` 按完成顺序取回）：
 
 ```
-resolve（列文件清单）
-  → fetch_all（并行下载到 data/tmp/<remote_id>/, 失败重试）
-  → processor.process（file=原样 / parquet=逐行解码为候选）
-  → persister.persist（put_file 去重 → 登记；已存在同 sha256 → skipped）
-  → 清理临时目录
+resolve（列文件清单，driver 侧 1 次）
+  → Ray 任务 ×N（params.workers，默认 2，滑动窗口）：
+       task_i(独立进程): download(重试+tqdm字节进度) → process(file/parquet) → persist(入库)
+  → driver 按完成顺序聚合 SyncReport + 更新 sync_run（done/failed/progress）
 ```
+
+- 峰值暂存 = `workers × 1 个文件`（parquet 解码后立即删除），而非全量文件
+- **容错**：worker 进程崩溃（OOM/段错误等）由 Ray `max_retries=2` 自动重跑（下载幂等、persist 去重保证不重复登记）；应用层错误（网络/解析/持久化）在任务内捕获并计入 `FileOutcome`，只影响该文件
+- **状态共享**：任务只通过 SQLite 通信——每个任务开自己的 `Database`（`mark_stale=False`，仅 driver 可标记 stale run）、按 `BackendConfig` 重建存储后端（boto3 client 不可序列化）；WAL + busy_timeout 兜底
+- 暂停语义不变：`pause_sync`/`resume_sync` 切换 run 状态，任务与 driver 在文件边界轮询停泊（persist 前不落库）
+- `ray` 是项目核心依赖（`[project.dependencies]`），同步直接可用，无需额外 extra
 
 全程写入 `downloads` 表（status/attempts/error），Web UI 可见失败原因与重试入口。
 
@@ -226,7 +233,7 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 
 ## 9. Web 管理界面（FastAPI）
 
-- 依赖进 `web` extra（fastapi + uvicorn）
+- fastapi + uvicorn 为核心依赖，`asset serve` 直接可用
 - 端点：
 
 | 方法 | 路径 | 说明 |
@@ -234,7 +241,7 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 | GET/POST | `/api/sources` | 数据源列表/新增 |
 | PUT/DELETE | `/api/sources/{id}` | 修改/删除数据源 |
 | POST | `/api/sources/{id}/sync` | 触发下载同步 |
-| GET | `/api/assets` | 资产列表（`?tag=&type=&status=&source=`） |
+| GET | `/api/assets` | 资产游标分页列表（`?tag=&type=&status=&source=&q=&cursor=&page_size=`，返回 `{items, next_cursor, page_size}`；`cursor` 为不透明 base64url token，翻页用返回的 `next_cursor`，无 `next_cursor` 即末页；标签与搜索在 SQL 侧求值） |
 | GET/DELETE | `/api/assets/{id}` | 资产详情/删除 |
 | POST/DELETE | `/api/assets/{id}/tags` | 打标/去标 |
 | POST/GET | `/api/snapshots` | 创建/列出快照 |
@@ -249,14 +256,13 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 
 ## 11. 依赖与测试计划
 
-### 依赖（optional-dependencies）
+### 依赖
+
+所有运行时依赖（ray、huggingface_hub、pyarrow、boto3、fastapi、uvicorn、pillow、tqdm）都在 `[project.dependencies]`（核心依赖，随 `uv sync` 自动安装），不使用动态 import 或运行时安装：
 
 | extra | 包 | 用途 |
 | --- | --- | --- |
-| `dev` | pytest, pytest-cov, moto, fastapi, uvicorn, httpx | 测试（moto 模拟 S3） |
-| `web` | fastapi, uvicorn | Web 管理界面 |
-| `rustfs` | boto3 | S3/RustFS 后端 |
-| `hf` | huggingface_hub | HF 下载器 |
+| `dev` | pytest, pytest-cov, moto, httpx | 测试（moto 模拟 S3） |
 
 ### 测试用例
 
@@ -264,8 +270,8 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 | --- | --- |
 | db | 八表 CRUD、sha256 唯一约束、版本历史、标签多对多、快照 |
 | storage | Local 内容寻址/去重；S3 后端用 moto（put/get/exists/流式） |
-| downloaders | local 导入分类；http 本地测试服务器（断点续传/重试/校验）；hf monkeypatch |
-| store | 端到端 sync：resolve→下载→上传→登记→失败记录；去重跳过 |
+| downloaders | local 导入分类；DownloadStage 重试/退避；PersistStage 事务去重 |
+| store | 端到端 sync（Ray）：resolve→下载→上传→登记→失败记录；并发去重；worker 崩溃重试；暂停/恢复 |
 | cli | init/source/import/sync/ls/tag/version/snapshot/export 全流程 |
 | web | TestClient：sources CRUD、资产筛选、打标、快照、预览 |
 

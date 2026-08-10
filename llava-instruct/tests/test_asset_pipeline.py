@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from fakehub import FakeHub as PicklableHub
 from llava_instruct.assets.db import Database
+
+from llava_instruct.assets.api import open_store
 from llava_instruct.assets.downloaders.base import Candidate, RemoteRef, sha256_of
 from llava_instruct.assets.downloaders.download import DownloadStage
 from llava_instruct.assets.downloaders.persist import PersistStage
@@ -25,7 +28,7 @@ class FakeHub:
     def list_repo_files(self, repo_id, repo_type="dataset"):
         return self.FILES
 
-    def hf_hub_download(self, repo_id, filename, repo_type="dataset", local_dir=None):
+    def hf_hub_download(self, repo_id, filename, repo_type="dataset", local_dir=None, **kwargs):
         self.download_calls += 1
         if filename in self.fail_names or self.download_calls <= self.fail_times:
             raise RuntimeError("transient network error")
@@ -35,12 +38,8 @@ class FakeHub:
         return target
 
 
-def _hub_stage(fake: FakeHub, monkeypatch, **kwargs) -> DownloadStage:
-    monkeypatch.setattr(
-        "llava_instruct.assets.downloaders.download._require_hub",
-        lambda: fake,
-    )
-    return DownloadStage(repo_id="org/ds", **kwargs)
+def _hub_stage(fake: FakeHub, **kwargs) -> DownloadStage:
+    return DownloadStage(repo_id="org/ds", hub=fake, **kwargs)
 
 
 # -------------------------------------------------------------- download
@@ -59,16 +58,16 @@ def test_from_source_reads_params():
     assert stage.attempts == 5
 
 
-def test_resolve_filters(monkeypatch):
-    stage = _hub_stage(FakeHub(), monkeypatch, subfolder="data")
+def test_resolve_filters():
+    stage = _hub_stage(FakeHub(), subfolder="data")
     remotes = stage.resolve()
     assert [r.name for r in remotes] == ["chart_rev.png", "notes.txt", "photo.png"]
     assert all(r.meta["repo_id"] == "org/ds" for r in remotes)
 
 
-def test_download_retries_then_succeeds(tmp_path, monkeypatch):
+def test_download_retries_then_succeeds(tmp_path):
     fake = FakeHub(fail_times=2)
-    stage = _hub_stage(fake, monkeypatch, attempts=3)
+    stage = _hub_stage(fake, attempts=3)
     remote = stage.resolve()[0]
     target = tmp_path / "out.png"
     stage.download(remote, target)
@@ -76,23 +75,13 @@ def test_download_retries_then_succeeds(tmp_path, monkeypatch):
     assert fake.download_calls == 3  # 2 failures + 1 success
 
 
-def test_download_fails_after_attempts(tmp_path, monkeypatch):
+def test_download_fails_after_attempts(tmp_path):
     fake = FakeHub(fail_times=99)
-    stage = _hub_stage(fake, monkeypatch, attempts=3)
+    stage = _hub_stage(fake, attempts=3)
     remote = stage.resolve()[0]
     with pytest.raises(RuntimeError, match="3 attempts"):
         stage.download(remote, tmp_path / "out.png")
     assert fake.download_calls == 3
-
-
-def test_fetch_all_parallel_partial_failure(tmp_path, monkeypatch):
-    fake = FakeHub(fail_names=("data/notes.txt",))
-    stage = _hub_stage(fake, monkeypatch)
-    remotes = stage.resolve()
-    downloaded, errors = stage.fetch_all(remotes, tmp_path / "work", workers=2)
-    assert set(downloaded) == {r.id for r in remotes if r.name != "notes.txt"}
-    assert len(errors) == 1
-    assert "notes.txt" in errors[next(iter(errors))] or len(errors) == 1
 
 
 # --------------------------------------------------------------- process
@@ -160,25 +149,37 @@ def test_persist_batch_reports_errors(tmp_path):
     assert "gone.png" in errors[0]
 
 
-def test_persist_pipeline_chain_with_store(tmp_path, monkeypatch):
-    """End-to-end through the store: hf source + file processor."""
-    from llava_instruct.assets.api import open_store
+def test_concurrent_tasks_dedup_same_content(tmp_path, ray_runtime):
+    """Two Ray tasks persist files with identical sha256 concurrently; the
+    BEGIN IMMEDIATE dedup registers the content exactly once."""
 
-    fake = FakeHub()
-    monkeypatch.setattr(
-        "llava_instruct.assets.downloaders.download._require_hub",
-        lambda: fake,
-    )
+    blob = tmp_path / "shared.png"
+    blob.write_bytes(b"\x89PNG\r\n\x1a\n" + b"s" * 128)
+    hub = PicklableHub(files=["data/a.png", "data/b.png"],
+                       copies={"data/a.png": str(blob), "data/b.png": str(blob)})
+    with open_store(data_dir=tmp_path / "data") as store:
+        source = store.add_source("hf-test", "huggingface",
+                                  params={"repo_id": "org/ds", "workers": 2})
+        report = store.sync_source(source.id, hub=hub)
+        assert report.new == 1
+        assert report.skipped_existing == 1
+        assert store.count_assets() == 1
+
+
+def test_persist_pipeline_chain_with_store(tmp_path, ray_runtime):
+    """End-to-end through the store (Ray tasks): hf source + file processor."""
+
     with open_store(data_dir=tmp_path / "data") as store:
         source = store.add_source("hf-test", "huggingface",
                                   params={"repo_id": "org/ds", "subfolder": "data"})
-        report = store.sync_source(source.id)
+        hub = PicklableHub(files=["data/chart_rev.png", "data/photo.png", "data/notes.txt"])
+        report = store.sync_source(source.id, hub=hub)
         assert report.new == 3  # chart_rev.png + notes.txt + photo.png
         assert report.failed == 0
         assets = store.list_assets(status="ready")
         assert {a.name for a in assets} == {"chart_rev.png", "notes.txt", "photo.png"}
         assert next(a for a in assets if a.name == "chart_rev.png").asset_type == "chart_image"
 
-        report2 = store.sync_source(source.id)
+        report2 = store.sync_source(source.id, hub=hub)
         assert report2.new == 0
         assert report2.skipped_existing == 3

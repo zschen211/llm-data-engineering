@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .schema import clamp_bbox, read_jsonl, validate_sample
+from .schema import clamp_bbox, read_jsonl, validate_sample, write_jsonl
 
 MIN_ANSWER_WORDS = 3
 
@@ -88,7 +88,5 @@ def mark_and_export(samples: list[dict], report: dict, out_path) -> list[dict]:
     for sample in samples:
         meta = sample.setdefault("meta", {})
         meta["qa_pass"] = sample["id"] not in passed_ids
-    from .schema import write_jsonl
-
     write_jsonl(out_path, samples)
     return samples

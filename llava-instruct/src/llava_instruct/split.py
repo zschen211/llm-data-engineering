@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 from collections import Counter
 from pathlib import Path
@@ -58,8 +59,6 @@ def build_manifest(splits: dict[str, list[dict]], out_path: Path) -> dict:
 
 
 def json_bytes(sample: dict) -> str:
-    import json
-
     return json.dumps(sample, sort_keys=True, ensure_ascii=False)
 
 

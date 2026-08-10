@@ -9,7 +9,7 @@ Evidence files are JSONL keyed by asset id:
 from __future__ import annotations
 
 from . import templates
-from .schema import TASK_TYPES, write_jsonl
+from .schema import TASK_TYPES, read_jsonl, write_jsonl
 
 GENERAL_TASKS = ("image_description", "counting_vqa", "region_grounding")
 DOCUMENT_TASKS = ("ocr_summary", "document_qa")
@@ -18,8 +18,6 @@ PAIR_TASKS = ("multi_image_comparison",)
 
 
 def _load_evidence(path) -> dict[str, dict]:
-    from .schema import read_jsonl
-
     if path is None:
         return {}
     return {row["id"]: row for row in read_jsonl(path)}

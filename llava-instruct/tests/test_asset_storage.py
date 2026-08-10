@@ -1,7 +1,10 @@
+import hashlib
+
+import moto
 import pytest
 from PIL import Image
 
-from llava_instruct.assets.storage import LocalStorageBackend, object_key_for
+from llava_instruct.assets.storage import LocalStorageBackend, S3StorageBackend, object_key_for
 
 
 @pytest.fixture
@@ -18,8 +21,6 @@ def test_object_key_layout():
 
 def test_local_put_get_dedup(tmp_path, sample_file):
     backend = LocalStorageBackend(tmp_path / "blobs")
-    import hashlib
-
     sha = hashlib.sha256(sample_file.read_bytes()).hexdigest()
     key1 = backend.put_file(sample_file, sha, ".png")
     key2 = backend.put_file(sample_file, sha, ".png")
@@ -38,13 +39,6 @@ def test_local_put_missing(tmp_path):
 
 
 def test_s3_backend_with_moto(tmp_path, sample_file):
-    moto = pytest.importorskip("moto")
-    import hashlib
-
-    from botocore.exceptions import ClientError
-
-    from llava_instruct.assets.storage import S3StorageBackend
-
     with moto.mock_aws():
         backend = S3StorageBackend(
             access_key="rustfsadmin",

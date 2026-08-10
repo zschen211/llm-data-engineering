@@ -5,10 +5,13 @@ timestamps) so it can be migrated to a shared server later.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sqlite3
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS assets (
 );
 CREATE INDEX IF NOT EXISTS idx_assets_source ON assets(source_id);
 CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status);
+CREATE INDEX IF NOT EXISTS idx_assets_created ON assets(created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS asset_versions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,6 +98,32 @@ CREATE TABLE IF NOT EXISTS snapshot_assets (
   asset_version INTEGER,
   PRIMARY KEY (snapshot_id, asset_id)
 );
+
+CREATE TABLE IF NOT EXISTS sync_runs (
+  id TEXT PRIMARY KEY,
+  source_id TEXT DEFAULT '',
+  status TEXT DEFAULT 'running',      -- running / paused / done / failed
+  total_files INTEGER DEFAULT 0,
+  done_files INTEGER DEFAULT 0,
+  failed_files INTEGER DEFAULT 0,
+  current_stage TEXT DEFAULT '',      -- resolve / download / process / persist
+  current_file TEXT DEFAULT '',
+  progress REAL DEFAULT 0.0,
+  error TEXT DEFAULT '',
+  created_at TEXT DEFAULT '',
+  updated_at TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS sync_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT DEFAULT '',
+  ts TEXT DEFAULT '',
+  stage TEXT DEFAULT '',
+  remote TEXT DEFAULT '',
+  level TEXT DEFAULT 'info',
+  message TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_sync_events_run ON sync_events(run_id, id);
 """
 
 
@@ -117,17 +147,63 @@ def _snapshot_hash(assets: list[Asset]) -> str:
 class Database:
     """Thin sqlite3 wrapper: schema init + typed CRUD for the asset layer."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, mark_stale: bool = True):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._conn.executescript(SCHEMA)
-        self._conn.commit()
+        self._thread_local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
+        self._connections_lock = threading.Lock()
+        self._executescript(SCHEMA)
+        if mark_stale:
+            self._mark_stale_runs_failed()
+
+    def _new_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.isolation_level = None  # autocommit; transactions are explicit (persist dedup)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        with self._connections_lock:
+            self._connections.append(conn)
+        return conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Per-thread connection (WAL mode): concurrent workers each get their
+        own connection instead of sharing one across threads (which is not
+        safe at the C level and can crash sqlite3)."""
+        conn = getattr(self._thread_local, "conn", None)
+        if conn is None:
+            conn = self._new_connection()
+            self._thread_local.conn = conn
+        return conn
+
+    def _executescript(self, script: str) -> None:
+        self._conn.executescript(script)
+
+    @contextmanager
+    def transaction(self):
+        """Serialized write transaction (BEGIN IMMEDIATE .. COMMIT).
+
+        Connections run in autocommit, so multi-statement writes must be
+        grouped explicitly. BEGIN IMMEDIATE also serializes writers across
+        processes (Ray workers / web threads), which is the dedup primitive
+        of the persist stage.
+        """
+        conn = self._conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
 
     def close(self) -> None:
-        self._conn.close()
+        with self._connections_lock:
+            conns, self._connections = self._connections, []
+        for conn in conns:
+            conn.close()
 
     def __enter__(self) -> "Database":
         return self
@@ -152,7 +228,6 @@ class Database:
              source.description, json.dumps(source.params, ensure_ascii=False),
              int(source.enabled), source.created_at, source.updated_at),
         )
-        self._conn.commit()
         return source
 
     def get_source(self, source_id: str) -> Source | None:
@@ -186,12 +261,10 @@ class Database:
         values.append(utcnow())
         values.append(source_id)
         self._conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id = ?", values)
-        self._conn.commit()
         return self.get_source(source_id)
 
     def delete_source(self, source_id: str) -> None:
         self._conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
-        self._conn.commit()
 
     @staticmethod
     def _source_from_row(row: sqlite3.Row) -> Source:
@@ -217,7 +290,6 @@ class Database:
             "INSERT INTO asset_versions (asset_id, version, sha256, object_key, created_at) VALUES (?, 1, ?, ?, ?)",
             (asset_id, sha256, object_key, now),
         )
-        self._conn.commit()
         return self.get_asset(asset_id)
 
     def get_asset(self, asset_id: str) -> Asset | None:
@@ -230,8 +302,59 @@ class Database:
 
     def list_assets(self, asset_type: str | None = None, status: str | None = None,
                     source_id: str | None = None, tags: list[str] | None = None,
-                    limit: int = 1000) -> list[Asset]:
-        clauses = []
+                    q: str | None = None) -> list[Asset]:
+        """All matching assets (no limit); used by materialize/snapshots.
+
+        Tag matching and keyword search are pushed down into SQL so results
+        stay correct regardless of size.
+        """
+        clauses, values = self._asset_filters(asset_type, status, source_id, tags, q)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT * FROM assets {where} ORDER BY created_at DESC, id DESC", values
+        ).fetchall()
+        return self._assets_with_tags(rows)
+
+    def list_assets_page(self, asset_type: str | None = None, status: str | None = None,
+                         source_id: str | None = None, tags: list[str] | None = None,
+                         q: str | None = None, cursor: tuple[str, str] | None = None,
+                         limit: int = 50) -> tuple[list[Asset], tuple[str, str] | None]:
+        """Keyset (cursor) pagination over assets ordered by (created_at, id) DESC.
+
+        ``cursor`` is the (created_at, id) of the last row of the previous page.
+        Returns (items, next_cursor); next_cursor is None when there is no more.
+        """
+        clauses, values = self._asset_filters(asset_type, status, source_id, tags, q)
+        if cursor is not None:
+            clauses.append("(created_at, id) < (?, ?)")
+            values += [cursor[0], cursor[1]]
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT * FROM assets {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+            values + [limit + 1],
+        ).fetchall()
+        has_more = len(rows) > limit
+        items = self._assets_with_tags(rows[:limit])
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            next_cursor = (last.created_at, last.id)
+        return items, next_cursor
+
+    def count_assets(self, asset_type: str | None = None, status: str | None = None,
+                     source_id: str | None = None, tags: list[str] | None = None,
+                     q: str | None = None) -> int:
+        clauses, values = self._asset_filters(asset_type, status, source_id, tags, q)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        return self._conn.execute(
+            f"SELECT COUNT(*) FROM assets {where}", values
+        ).fetchone()[0]
+
+    @staticmethod
+    def _asset_filters(asset_type: str | None, status: str | None, source_id: str | None,
+                       tags: list[str] | None, q: str | None) -> tuple[list[str], list]:
+        """Build WHERE clauses; tag specs are "group=name" and match via JOIN."""
+        clauses: list[str] = []
         values: list = []
         if asset_type:
             clauses.append("asset_type = ?")
@@ -242,53 +365,44 @@ class Database:
         if source_id:
             clauses.append("source_id = ?")
             values.append(source_id)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        rows = self._conn.execute(
-            f"SELECT * FROM assets {where} ORDER BY created_at DESC LIMIT ?", values + [limit]
-        ).fetchall()
+        for spec in tags or []:
+            group, _, name = spec.partition("=")
+            clauses.append(
+                "id IN (SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id "
+                "WHERE t.tag_group = ? AND t.name = ?)"
+            )
+            values += [group, name]
+        if q:
+            pattern = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            clauses.append("(name LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')")
+            values += [pattern, pattern]
+        return clauses, values
+
+    def _assets_with_tags(self, rows) -> list[Asset]:
         assets = [self._asset_from_row(r) for r in rows]
-        if tags:
-            assets = [a for a in assets if self._matches_tags(a.id, tags)]
         for asset in assets:
             asset.tags = self.asset_tags(asset.id)
         return assets
 
-    def _matches_tags(self, asset_id: str, tags: list[str]) -> bool:
-        for spec in tags:
-            group, _, name = spec.partition("=")
-            row = self._conn.execute(
-                "SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id "
-                "WHERE at.asset_id = ? AND t.name = ? AND t.tag_group = ?",
-                (asset_id, name, group),
-            ).fetchone()
-            if row is None:
-                return False
-        return True
-
-    def count_assets(self, source_id: str | None = None) -> int:
-        if source_id:
-            return self._conn.execute("SELECT COUNT(*) FROM assets WHERE source_id = ?", (source_id,)).fetchone()[0]
-        return self._conn.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
-
     def delete_asset(self, asset_id: str) -> None:
-        for table in ("asset_versions", "asset_tags", "snapshot_assets", "downloads"):
-            self._conn.execute(f"DELETE FROM {table} WHERE asset_id = ?", (asset_id,))
-        self._conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
-        self._conn.commit()
+        with self.transaction():
+            for table in ("asset_versions", "asset_tags", "snapshot_assets", "downloads"):
+                self._conn.execute(f"DELETE FROM {table} WHERE asset_id = ?", (asset_id,))
+            self._conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
 
     def bump_version(self, asset_id: str, sha256: str, object_key: str, change_note: str) -> None:
-        version = self._conn.execute(
-            "SELECT COALESCE(MAX(version), 0) + 1 FROM asset_versions WHERE asset_id = ?", (asset_id,)
-        ).fetchone()[0]
-        self._conn.execute(
-            "INSERT INTO asset_versions (asset_id, version, sha256, object_key, change_note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (asset_id, version, sha256, object_key, change_note, utcnow()),
-        )
-        self._conn.execute(
-            "UPDATE assets SET sha256 = ?, object_key = ?, current_version = ?, updated_at = ? WHERE id = ?",
-            (sha256, object_key, version, utcnow(), asset_id),
-        )
-        self._conn.commit()
+        with self.transaction():
+            version = self._conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM asset_versions WHERE asset_id = ?", (asset_id,)
+            ).fetchone()[0]
+            self._conn.execute(
+                "INSERT INTO asset_versions (asset_id, version, sha256, object_key, change_note, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (asset_id, version, sha256, object_key, change_note, utcnow()),
+            )
+            self._conn.execute(
+                "UPDATE assets SET sha256 = ?, object_key = ?, current_version = ?, updated_at = ? WHERE id = ?",
+                (sha256, object_key, version, utcnow(), asset_id),
+            )
 
     def version_history(self, asset_id: str) -> list[AssetVersion]:
         rows = self._conn.execute(
@@ -311,7 +425,6 @@ class Database:
             "UPDATE assets SET sha256 = ?, object_key = ?, current_version = ?, updated_at = ? WHERE id = ?",
             (row["sha256"], row["object_key"], version, utcnow(), asset_id),
         )
-        self._conn.commit()
         return self.get_asset(asset_id)
 
     @staticmethod
@@ -335,14 +448,12 @@ class Database:
             tag = Tag(id=row["id"], name=row["name"], group=row["tag_group"])
             if tag.group != group:
                 self._conn.execute("UPDATE tags SET tag_group = ? WHERE id = ?", (group, tag.id))
-                self._conn.commit()
             return tag
         tag = Tag(id=new_id("tag_"), name=name, group=group)
         self._conn.execute(
             "INSERT INTO tags (id, name, tag_group) VALUES (?, ?, ?)",
             (tag.id, tag.name, tag.group),
         )
-        self._conn.commit()
         return tag
 
     def tag_asset(self, asset_id: str, name: str, group: str = "default") -> None:
@@ -351,13 +462,11 @@ class Database:
             "INSERT OR IGNORE INTO asset_tags (asset_id, tag_id) VALUES (?, ?)",
             (asset_id, tag.id),
         )
-        self._conn.commit()
 
     def untag_asset(self, asset_id: str, name: str) -> None:
         row = self._conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
         if row:
             self._conn.execute("DELETE FROM asset_tags WHERE asset_id = ? AND tag_id = ?", (asset_id, row["id"]))
-            self._conn.commit()
 
     def list_tags(self, group: str | None = None) -> list[Tag]:
         if group:
@@ -393,7 +502,6 @@ class Database:
                 (asset_id, downloader, status, error, now),
             )
             download_id = cur.lastrowid
-        self._conn.commit()
         return download_id
 
     def list_downloads(self, limit: int = 100) -> list[dict]:
@@ -408,16 +516,16 @@ class Database:
         snapshot_id = name or new_snapshot_id(manifest_sha1, assets)
         snapshot = Snapshot(id=snapshot_id, manifest_sha1=manifest_sha1,
                             asset_count=len(assets), created_at=utcnow())
-        self._conn.execute(
-            "INSERT OR REPLACE INTO snapshots (id, manifest_sha1, asset_count, created_at) VALUES (?, ?, ?, ?)",
-            (snapshot.id, snapshot.manifest_sha1, snapshot.asset_count, snapshot.created_at),
-        )
-        for asset in assets:
+        with self.transaction():
             self._conn.execute(
-                "INSERT OR REPLACE INTO snapshot_assets (snapshot_id, asset_id, asset_version) VALUES (?, ?, ?)",
-                (snapshot.id, asset.id, asset.current_version),
+                "INSERT OR REPLACE INTO snapshots (id, manifest_sha1, asset_count, created_at) VALUES (?, ?, ?, ?)",
+                (snapshot.id, snapshot.manifest_sha1, snapshot.asset_count, snapshot.created_at),
             )
-        self._conn.commit()
+            for asset in assets:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO snapshot_assets (snapshot_id, asset_id, asset_version) VALUES (?, ?, ?)",
+                    (snapshot.id, asset.id, asset.current_version),
+                )
         return snapshot
 
     def list_snapshots(self) -> list[Snapshot]:
@@ -438,3 +546,92 @@ class Database:
             "WHERE sa.snapshot_id = ?", (snapshot_id,)
         ).fetchall()
         return [self._asset_from_row(r) for r in rows]
+
+    # ------------------------------------------------------------ sync runs
+    RUN_FIELDS = ("status", "total_files", "done_files", "failed_files",
+                  "current_stage", "current_file", "progress", "error")
+
+    def create_sync_run(self, source_id: str) -> str:
+        run_id = new_id("run_")
+        now = utcnow()
+        self._conn.execute(
+            "INSERT INTO sync_runs (id, source_id, status, created_at, updated_at) "
+            "VALUES (?, ?, 'running', ?, ?)",
+            (run_id, source_id, now, now),
+        )
+        return run_id
+
+    def update_sync_run(self, run_id: str, **fields) -> None:
+        sets = []
+        values: list = []
+        for key, value in fields.items():
+            if key not in self.RUN_FIELDS:
+                raise ValueError(f"unknown sync_run field: {key}")
+            sets.append(f"{key} = ?")
+            values.append(value)
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        values.append(utcnow())
+        values.append(run_id)
+        self._conn.execute(f"UPDATE sync_runs SET {', '.join(sets)} WHERE id = ?", values)
+
+    def get_sync_run(self, run_id: str) -> dict | None:
+        row = self._conn.execute("SELECT * FROM sync_runs WHERE id = ?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_running_run(self, source_id: str) -> dict | None:
+        """The most recent still-active sync run of a source (running or
+        paused; a paused run keeps its entry point visible until resumed)."""
+        row = self._conn.execute(
+            "SELECT * FROM sync_runs WHERE source_id = ? AND status IN ('running', 'paused') "
+            "ORDER BY created_at DESC LIMIT 1", (source_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_sync_runs(self, limit: int = 20) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM sync_runs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def append_sync_event(self, run_id: str, stage: str, remote: str,
+                          level: str = "info", message: str = "") -> int:
+        cur = self._conn.execute(
+            "INSERT INTO sync_events (run_id, ts, stage, remote, level, message) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (run_id, utcnow(), stage, remote, level, message),
+        )
+        return cur.lastrowid
+
+    def get_sync_events(self, run_id: str, after_id: int = 0, limit: int = 200) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM sync_events WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?",
+            (run_id, after_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _mark_stale_runs_failed(self) -> None:
+        """Runs left 'running'/'paused' by a previous process are marked
+        failed on open (no worker thread survives a restart to resume them)."""
+        self._conn.execute(
+            "UPDATE sync_runs SET status = 'failed', "
+            "error = error || ' | interrupted by restart', updated_at = ? "
+            "WHERE status IN ('running', 'paused')",
+            (utcnow(),),
+        )
+
+    def backup_to(self, path: Path) -> Path:
+        """Create a consistent backup of the database via the online backup API.
+
+        Safe to run while the store is being written (reads + writes in
+        flight); the result is an independent, consistent snapshot.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        target = sqlite3.connect(str(path))
+        try:
+            self._conn.backup(target)
+        finally:
+            target.close()
+        return path

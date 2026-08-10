@@ -19,8 +19,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from llava_instruct.assets.storage import S3StorageBackend
-from llava_instruct.assets.store import AssetStore
+from llava_instruct.log import setup_logging  # noqa: E402
+
+setup_logging()
+
+from llava_instruct.assets.storage import S3StorageBackend  # noqa: E402
+from llava_instruct.assets.store import AssetStore  # noqa: E402
 
 
 def make_images(root: Path) -> Path:

@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from ..schema import ASSET_TYPES, write_jsonl
+from ..schema import ASSET_TYPES, read_jsonl, write_jsonl
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -75,6 +75,4 @@ def build_asset_pool(src_dir: Path, out_path: Path, labels: dict[str, str] | Non
 
 
 def load_asset_pool(path: Path) -> list[dict]:
-    from ..schema import read_jsonl
-
     return read_jsonl(path)

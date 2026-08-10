@@ -1,5 +1,7 @@
 import pytest
 
+from llava_instruct.schema import write_jsonl
+
 from llava_instruct.cli import get_parser, main
 
 
@@ -9,7 +11,6 @@ def test_cli_missing_command_fails():
 
 
 def test_cli_split_end_to_end(tmp_path):
-    from llava_instruct.schema import write_jsonl
 
     samples = [
         {
@@ -29,7 +30,6 @@ def test_cli_split_end_to_end(tmp_path):
 
 
 def test_cli_qa_fails_on_bad_sample(tmp_path):
-    from llava_instruct.schema import write_jsonl
 
     samples = [
         {

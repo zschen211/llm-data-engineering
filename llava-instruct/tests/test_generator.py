@@ -1,4 +1,5 @@
 from llava_instruct import generator, templates
+from llava_instruct.schema import write_jsonl
 
 
 def _asset(asset_type, path="img.png"):
@@ -40,7 +41,6 @@ def test_interleaved_pair_task():
 def test_generate_samples_pipeline(tmp_path):
     assets_path = tmp_path / "assets.jsonl"
     out_path = tmp_path / "samples.jsonl"
-    from llava_instruct.schema import write_jsonl
     pool = [{"id": "asset_1", "path": "img.png", "asset_type": "general_image", "name": "img.png"}]
     write_jsonl(assets_path, pool)
     cap_path = tmp_path / "captions.jsonl"

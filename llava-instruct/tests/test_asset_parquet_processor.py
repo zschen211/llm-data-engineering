@@ -2,18 +2,14 @@
 import io
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from PIL import Image
 
-pytest.importorskip("pyarrow")
-import pyarrow as pa  # noqa: E402
-import pyarrow.parquet as pq  # noqa: E402
-
-from llava_instruct.assets.downloaders.base import RemoteRef, sha256_of  # noqa: E402
-from llava_instruct.assets.downloaders.process import get_processor  # noqa: E402
-from llava_instruct.assets.downloaders.processors.parquet import (  # noqa: E402
-    _cell_bytes,
-)
+from llava_instruct.assets.downloaders.base import RemoteRef, sha256_of
+from llava_instruct.assets.downloaders.process import get_processor
+from llava_instruct.assets.downloaders.processors.parquet import _cell_bytes
 
 
 def _png_bytes(width=12, height=10, color="red") -> bytes:
@@ -98,15 +94,3 @@ def test_cell_bytes_variants(monkeypatch):
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     assert _cell_bytes("https://example.com/img.png") == b"from-url"
-
-
-def test_requires_pyarrow(tmp_path, monkeypatch):
-    def no_pyarrow():
-        raise RuntimeError("requires the optional 'parquet' extra")
-
-    monkeypatch.setattr(
-        "llava_instruct.assets.downloaders.processors.parquet._require_pyarrow",
-        no_pyarrow,
-    )
-    with pytest.raises(RuntimeError, match="parquet"):
-        get_processor("parquet", {}).process(_remote(), tmp_path / "x.parquet", tmp_path)

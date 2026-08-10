@@ -3,14 +3,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from collections import Counter
 from pathlib import Path
 
+import uvicorn
+
 from . import generator, qa as qa_mod, render, split
 from .assets import balance_assets
 from .assets.api import AssetStore, open_store
+from .assets.web import default_app
+from .log import setup_logging
 from .schema import read_jsonl, write_jsonl
 
 DEFAULT_DATA_DIR = Path(os.environ.get("LLAVA_DATA_DIR", "data"))
@@ -30,6 +35,7 @@ def get_parser():
         prog="llava-instruct",
         description="LLaVA multimodal instruction data factory",
     )
+    parser.add_argument("--verbose", action="store_true", help="enable DEBUG logging")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_assets = subparsers.add_parser("prepare-assets", help="Import + balance an image dir into an asset pool")
@@ -105,6 +111,14 @@ def _add_asset_parser(subparsers) -> None:
     a_sync.add_argument("source_id")
     a_sync.add_argument("--data-dir", type=Path, default=None)
 
+    a_pause = asset_sub.add_parser("pause", help="Pause a running sync run (works cross-process)")
+    a_pause.add_argument("run_id")
+    a_pause.add_argument("--data-dir", type=Path, default=None)
+
+    a_resume = asset_sub.add_parser("resume", help="Resume a paused sync run (works cross-process)")
+    a_resume.add_argument("run_id")
+    a_resume.add_argument("--data-dir", type=Path, default=None)
+
     a_ls = asset_sub.add_parser("ls", help="List assets (with filters)")
     a_ls.add_argument("--tag", action="append", default=None, help="group=name (repeatable)")
     a_ls.add_argument("--type", default=None)
@@ -150,10 +164,14 @@ def _add_asset_parser(subparsers) -> None:
     v_snap_ls = version_sub.add_parser("snapshot-list")
     v_snap_ls.add_argument("--data-dir", type=Path, default=None)
 
-    a_serve = asset_sub.add_parser("serve", help="Start the Web management UI (requires web extra)")
+    a_serve = asset_sub.add_parser("serve", help="Start the Web management UI")
     a_serve.add_argument("--host", default="0.0.0.0")
     a_serve.add_argument("--port", type=int, default=8000)
     a_serve.add_argument("--data-dir", type=Path, default=None)
+
+    a_backup = asset_sub.add_parser("backup", help="Backup the metadata database (online, consistent)")
+    a_backup.add_argument("--out", type=Path, default=None, help="备份文件路径（默认 <data_dir>/backups/assets_<时间戳>.db）")
+    a_backup.add_argument("--data-dir", type=Path, default=None)
 
 
 # ----------------------------------------------------------- old pipeline
@@ -243,13 +261,24 @@ def cmd_asset(args):
         "source": cmd_asset_source,
         "import": cmd_asset_import,
         "sync": cmd_asset_sync,
+        "pause": cmd_asset_pause,
+        "resume": cmd_asset_resume,
         "ls": cmd_asset_ls,
         "materialize": cmd_asset_materialize,
         "tag": cmd_asset_tag,
         "version": cmd_asset_version,
         "serve": cmd_asset_serve,
+        "backup": cmd_asset_backup,
     }
     return handlers[args.asset_command](args)
+
+
+def cmd_asset_backup(args):
+    with default_store(args.data_dir) as store:
+        path = store.backup_db(out_path=args.out)
+        print(f"备份完成: {path}（资产 {store.count_assets()} 条）", flush=True)
+        print("提示: 该备份为元数据一致性快照；图片 blob 请另行备份存储后端目录", flush=True)
+    return 0
 
 
 def cmd_asset_init(args):
@@ -309,6 +338,28 @@ def cmd_asset_sync(args):
         for error in report.errors:
             print(f"  ! {error}", file=sys.stderr)
         return 1 if report.failed else 0
+
+
+def cmd_asset_pause(args):
+    with default_store(args.data_dir) as store:
+        try:
+            run = store.pause_sync(args.run_id)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"paused: {run['id']} (progress={run['progress']:.1f}%)")
+        return 0
+
+
+def cmd_asset_resume(args):
+    with default_store(args.data_dir) as store:
+        try:
+            run = store.resume_sync(args.run_id)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"resumed: {run['id']}")
+        return 0
 
 
 def cmd_asset_ls(args):
@@ -380,20 +431,25 @@ def cmd_asset_version(args):
 
 
 def cmd_asset_serve(args):
-    try:
-        import uvicorn  # noqa: F401
-    except ImportError as exc:
-        raise SystemExit("the Web UI requires the optional 'web' extra (uv sync --extra web)") from exc
-    from .assets.web import default_app
-
     app = default_app(args.data_dir)
-    print(f"serving asset manager on http://{args.host}:{args.port}")
+    with default_store(args.data_dir) as store:
+        print(f"数据目录 : {store.data_dir}", flush=True)
+        print(f"元数据库 : {store.db_path}", flush=True)
+        print(f"后端     : {store.backend_name}"
+              + (f" (bucket={getattr(store.backend, 'bucket', '')})" if store.backend_name == "s3" else ""),
+              flush=True)
+        print(f"资产总数 : {store.count_assets()}（源数 {len(store.list_sources())}，快照 {len(store.list_snapshots())}）",
+              flush=True)
+        if store.count_assets() == 0:
+            print("警告: 资产总数为 0，请确认 --data-dir 指向正确的数据目录", file=sys.stderr, flush=True)
+    print(f"serving asset manager on http://{args.host}:{args.port}", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 
 
 def main(argv=None):
     args = get_parser().parse_args(argv)
+    setup_logging(logging.DEBUG if getattr(args, "verbose", False) else logging.INFO)
     if args.command == "asset":
         return cmd_asset(args)
     handlers = {

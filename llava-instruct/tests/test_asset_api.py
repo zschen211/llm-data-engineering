@@ -4,6 +4,7 @@ import pytest
 from PIL import Image
 
 from llava_instruct.assets.api import AssetStore, SyncReport, open_store
+from llava_instruct.assets.storage import LocalStorageBackend
 
 
 def _images(root):
@@ -29,8 +30,6 @@ def test_open_store_requires_credentials_with_rustfs_env(tmp_path, monkeypatch):
 
 
 def test_open_store_with_explicit_backend(tmp_path):
-    from llava_instruct.assets.storage import LocalStorageBackend
-
     backend = LocalStorageBackend(tmp_path / "blobs")
     store = open_store(data_dir=tmp_path / "data", backend=backend)
     assert store.backend is backend

@@ -9,8 +9,7 @@ Processor params:
   asset_type:   "general_image" (default)
   batch_size:   512 (default) — rows per streaming batch
 
-Requires the optional ``parquet`` extra (pyarrow). Deletes the downloaded
-parquet after extraction to free disk space.
+Deletes the downloaded parquet after extraction to free disk space.
 """
 from __future__ import annotations
 
@@ -19,21 +18,11 @@ import os
 import urllib.request
 from pathlib import Path
 
+import pyarrow.parquet as pq
+from PIL import Image
+
 from ...downloaders.base import Candidate, RemoteRef, sha256_of
 from ...downloaders.process import Processor, register_processor
-
-
-def _require_pyarrow():
-    try:
-        import pyarrow.parquet  # noqa: F401
-    except ImportError as exc:
-        raise RuntimeError(
-            "the parquet processor requires the optional 'parquet' extra "
-            "(uv sync --extra parquet)"
-        ) from exc
-    import pyarrow.parquet
-
-    return pyarrow.parquet
 
 
 def _cell_bytes(cell, fallback_url: str = "") -> bytes | None:
@@ -59,7 +48,6 @@ class ParquetProcessor(Processor):
     name = "parquet"
 
     def process(self, remote: RemoteRef, local_path: Path, work_dir: Path) -> list[Candidate]:
-        pq = _require_pyarrow()
         image_column = self.params.get("image_column", "image")
         asset_type = self.params.get("asset_type", "general_image")
         batch_size = int(self.params.get("batch_size", 512))
@@ -80,8 +68,6 @@ class ParquetProcessor(Processor):
                         skipped += 1
                         continue
                     try:
-                        from PIL import Image
-
                         image = Image.open(io.BytesIO(data))
                         image.load()
                     except Exception:

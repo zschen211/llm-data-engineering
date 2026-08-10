@@ -2,10 +2,11 @@
 
 Responsibilities (network-bound, huggingface only):
   - resolve: enumerate the repo files (with subfolder/pattern filters)
-  - download: single-file fetch with retry and backoff
-  - fetch_all: parallel fetching across files (``workers``)
+  - download: single-file fetch with retry and backoff, reporting per-file
+    byte progress through an ``on_event`` callback
 
-Requires the optional ``hf`` extra (huggingface_hub).
+Parallelism is provided by the caller: the Ray sync driver runs one task per
+file (``ray_sync._sync_file_task``). Tests inject a fake hub via ``hub=``.
 """
 from __future__ import annotations
 
@@ -13,22 +14,13 @@ import fnmatch
 import hashlib
 import shutil
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
+
+import huggingface_hub
+from tqdm import tqdm
 
 from .base import RemoteRef
-
-
-def _require_hub():
-    try:
-        import huggingface_hub  # noqa: F401
-    except ImportError as exc:
-        raise RuntimeError(
-            "downloading requires the optional 'hf' extra (uv sync --extra hf)"
-        ) from exc
-    import huggingface_hub
-
-    return huggingface_hub
 
 
 def _matched(path: str, subfolder: str, allow: list[str] | None, ignore: list[str] | None) -> bool:
@@ -41,20 +33,53 @@ def _matched(path: str, subfolder: str, allow: list[str] | None, ignore: list[st
     return True
 
 
+def _progress_tqdm_class(on_event: Callable, remote: str, min_interval_pct: float = 2.0):
+    """A tqdm subclass reporting byte progress through ``on_event``.
+
+    huggingface_hub subclasses it via its own kwargs (total/unit/desc/disable);
+    every ``update(n)`` yields a fraction of the current file, throttled to
+    ``min_interval_pct`` percentage points.
+    """
+    class _ProgressTqdm(tqdm):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._on_event = on_event
+            self._remote = remote
+            self._min_pct = min_interval_pct
+            self._last_pct = -1.0
+
+        def update(self, n: int = 1):
+            super().update(n)
+            if not self._on_event or not self.total:
+                return
+            pct = self.n / self.total * 100
+            if pct - self._last_pct >= self._min_pct or self.n >= self.total:
+                self._last_pct = pct
+                self._on_event(
+                    stage="download",
+                    remote=self._remote,
+                    message=f"下载中 {self.n}/{self.total} 字节 ({pct:.1f}%)",
+                    fraction=self.n / self.total,
+                )
+
+    return _ProgressTqdm
+
+
 class DownloadStage:
     def __init__(self, repo_id: str, repo_type: str = "dataset", subfolder: str = "",
                  allow_patterns: list[str] | None = None,
                  ignore_patterns: list[str] | None = None,
-                 attempts: int = 3):
+                 attempts: int = 3, hub=None):
         self.repo_id = repo_id
         self.repo_type = repo_type
         self.subfolder = subfolder
         self.allow_patterns = allow_patterns
         self.ignore_patterns = ignore_patterns
         self.attempts = max(1, attempts)
+        self.hub = hub  # injectable for tests; None → real huggingface_hub
 
     @staticmethod
-    def from_source(source) -> "DownloadStage":
+    def from_source(source, hub=None) -> "DownloadStage":
         params = source.params
         repo_id = params.get("repo_id")
         if not repo_id:
@@ -66,10 +91,14 @@ class DownloadStage:
             allow_patterns=params.get("allow_patterns"),
             ignore_patterns=params.get("ignore_patterns"),
             attempts=params.get("attempts", 3),
+            hub=hub,
         )
 
+    def _hub(self):
+        return self.hub or huggingface_hub
+
     def resolve(self) -> list[RemoteRef]:
-        hub = _require_hub()
+        hub = self._hub()
         remotes: list[RemoteRef] = []
         for path in sorted(hub.list_repo_files(self.repo_id, repo_type=self.repo_type)):
             if not _matched(path, self.subfolder, self.allow_patterns, self.ignore_patterns):
@@ -88,44 +117,32 @@ class DownloadStage:
             )
         return remotes
 
-    def download(self, remote: RemoteRef, target: Path) -> Path:
+    def download(self, remote: RemoteRef, target: Path,
+                 on_event: Callable | None = None) -> Path:
         """Fetch one file to ``target`` with retry + backoff."""
-        hub = _require_hub()
+        hub = self._hub()
         last_error: Exception | None = None
+        tqdm_class = (
+            _progress_tqdm_class(on_event, remote.name) if on_event else None
+        )
         for attempt in range(self.attempts):
             try:
                 cached = hub.hf_hub_download(
                     self.repo_id, remote.path_in_repo,
                     repo_type=self.repo_type,
                     local_dir=str(target.parent / ".hf_cache"),
+                    tqdm_class=tqdm_class,
                 )
                 shutil.copyfile(cached, target)
                 return target
             except Exception as exc:  # transient network/cache errors
                 last_error = exc
+                if on_event:
+                    on_event(stage="download", remote=remote.name,
+                             message=f"第 {attempt + 1} 次尝试失败: {exc}", level="error")
                 if attempt < self.attempts - 1:
                     time.sleep(2**attempt)
         raise RuntimeError(
             f"download failed after {self.attempts} attempts: {last_error}"
         ) from last_error
 
-    def fetch_all(self, remotes: list[RemoteRef], work_root: Path,
-                  workers: int = 2) -> tuple[dict[str, Path], dict[str, str]]:
-        """Fetch files in parallel; return (downloaded: id->path, errors: id->msg)."""
-        def work(remote: RemoteRef) -> tuple[str, Path | None, str]:
-            work_dir = work_root / remote.id
-            work_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                return remote.id, self.download(remote, work_dir / remote.name), ""
-            except Exception as exc:
-                return remote.id, None, str(exc)
-
-        downloaded: dict[str, Path] = {}
-        errors: dict[str, str] = {}
-        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-            for remote_id, local, error in executor.map(work, remotes):
-                if local is None:
-                    errors[remote_id] = error
-                else:
-                    downloaded[remote_id] = local
-        return downloaded, errors

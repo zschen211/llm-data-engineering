@@ -1,12 +1,10 @@
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
 
-pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient  # noqa: E402
-
-from llava_instruct.assets.store import AssetStore  # noqa: E402
-from llava_instruct.assets.storage import LocalStorageBackend  # noqa: E402
-from llava_instruct.assets.web import create_app  # noqa: E402
+from llava_instruct.assets.store import AssetStore
+from llava_instruct.assets.storage import LocalStorageBackend
+from llava_instruct.assets.web import create_app
 
 
 @pytest.fixture
@@ -49,7 +47,7 @@ def test_downloads_endpoint(client):
 
 
 def test_rollback_endpoint(client):
-    asset = client.get("/api/assets").json()[0]
+    asset = client.get("/api/assets").json()["items"][0]
     client.post(f"/api/assets/{asset['id']}/rollback", json={"version": 1})
     detail = client.get(f"/api/assets/{asset['id']}").json()
     assert detail["current_version"] == 1
@@ -70,13 +68,16 @@ def test_sources_api(client):
 def test_assets_api_filter_and_tag(client):
     response = client.get("/api/assets")
     assert response.status_code == 200
-    assets = response.json()
+    body = response.json()
+    assert body["page_size"] == 50
+    assert body["next_cursor"] is None  # 2 assets fit in one page
+    assets = body["items"]
     assert len(assets) == 2
 
     chart = [a for a in assets if a["asset_type"] == "document_image"][0]
     response = client.post(f"/api/assets/{chart['id']}/tags", json={"name": "doc", "group": "task"})
     assert response.status_code == 201
-    filtered = client.get("/api/assets", params={"tag": "task=doc"}).json()
+    filtered = client.get("/api/assets", params={"tag": "task=doc"}).json()["items"]
     assert len(filtered) == 1
     assert filtered[0]["id"] == chart["id"]
 
@@ -93,7 +94,7 @@ def test_sync_rejects_local_import_source(client):
 
 
 def test_preview(client):
-    asset = client.get("/api/assets").json()[0]
+    asset = client.get("/api/assets").json()["items"][0]
     response = client.get(f"/api/assets/{asset['id']}/preview")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/png")
@@ -107,6 +108,6 @@ def test_snapshots_api(client):
 
 
 def test_delete_asset(client):
-    asset = client.get("/api/assets").json()[0]
+    asset = client.get("/api/assets").json()["items"][0]
     assert client.delete(f"/api/assets/{asset['id']}").status_code == 204
     assert client.get(f"/api/assets/{asset['id']}").status_code == 404
