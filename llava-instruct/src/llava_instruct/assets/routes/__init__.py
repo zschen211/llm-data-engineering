@@ -13,7 +13,9 @@ from fastapi import FastAPI
 
 from ...log import persist_uvicorn_logs, setup_logging
 from ..api import AssetStore, open_store
+from ..services.cluster import cluster_manager
 from .assets import make_router as assets_router
+from .cluster import make_router as cluster_router
 from .downloads import make_router as downloads_router
 from .info import make_router as info_router
 from .snapshots import make_router as snapshots_router
@@ -26,7 +28,14 @@ async def _lifespan(app: FastAPI):
     # Uvicorn reconfigures logging at startup; re-attach its loggers to the
     # persisted file handler from the lifespan, which runs afterwards.
     persist_uvicorn_logs()
-    yield
+    # Own the Ray cluster for the app's lifetime: started once here, reused
+    # by every sync (run_ray_sync only ensures it is up). If the cluster was
+    # already initialized by someone else, it is reused and not shut down.
+    cluster_manager.ensure_started()
+    try:
+        yield
+    finally:
+        cluster_manager.stop()
 
 
 def create_app(store: AssetStore) -> FastAPI:
@@ -41,6 +50,7 @@ def create_app(store: AssetStore) -> FastAPI:
         assets_router(store),
         downloads_router(store),
         snapshots_router(store),
+        cluster_router(store),
     ):
         app.include_router(router)
     return app

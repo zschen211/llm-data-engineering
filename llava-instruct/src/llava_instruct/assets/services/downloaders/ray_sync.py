@@ -31,6 +31,7 @@ import ray
 from ...meta.db import Database
 from ...meta.models import Source
 from ...storage import LocalStorageBackend, S3StorageBackend, StorageBackend
+from ..cluster import cluster_manager
 
 # side-effect import: registers the built-in processors (register_processor)
 from . import processors  # noqa: F401  # pylint: disable=unused-import
@@ -242,15 +243,9 @@ def run_ray_sync(
     file-granularity pause semantics). Outcomes are returned in the order the
     tasks completed, not the input order.
     """
-    if not ray.is_initialized():
-        # Exclude the cwd from the runtime-env package: the package is pip-
-        # installed in the same venv, so workers don't need the source tree
-        # (and it may be huge / contain other projects' virtualenvs).
-        ray.init(
-            num_cpus=max(1, cfg.workers),
-            ignore_reinit_error=True,
-            runtime_env={"excludes": ["**"]},
-        )
+    # The cluster is owned by the process-wide manager (started in the web
+    # app lifespan); this is a cheap no-op when it is already up.
+    cluster_manager.ensure_started()
 
     def park_if_paused() -> None:
         while paused is not None and paused():

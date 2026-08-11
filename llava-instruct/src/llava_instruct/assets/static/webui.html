@@ -34,6 +34,11 @@ body{font-family:var(--sans);background:var(--canvas);color:var(--ink);font-size
 #topbar .btn-g{background:transparent;border-color:var(--dark-line);color:var(--dark-text)}
 #topbar .btn-g:hover{border-color:var(--dark-muted)}
 #topbar button:focus-visible{outline:2px solid var(--dark-text);outline-offset:2px}
+.cluster-stats{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--dark-muted);border:1px solid var(--dark-line);padding:4px 10px;letter-spacing:.06em;white-space:nowrap}
+.cluster-stats .dot{width:7px;height:7px;border-radius:50%;background:var(--dark-muted)}
+.cluster-stats .dot.up{background:var(--ok-bright)}
+.cluster-stats .dot.down{background:var(--err-bright)}
+.cluster-stats b{color:var(--dark-text);font-weight:600;font-variant-numeric:tabular-nums}
 
 button{font:inherit;cursor:pointer;border-radius:0;border:1px solid transparent;font-size:13px;padding:6px 13px;line-height:1.4;transition:background .12s,border-color .12s,color .12s}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
@@ -185,6 +190,7 @@ a.link:hover{color:var(--muted)}
   </div>
   <div class="strip-stats" id="stripStats">SRC <b>–</b> · ASSETS <b>–</b> · SNAP <b>–</b></div>
   <div class="top-actions">
+    <span class="cluster-stats" id="clusterStats" title="Ray 集群状态（每 5 秒刷新）"><i class="dot" id="clusterDot"></i>RAY <b id="clusterCpu">–</b></span>
     <button class="btn-g" onclick="refreshAll()">刷新</button>
   </div>
 </header>
@@ -295,6 +301,7 @@ a.link:hover{color:var(--muted)}
   <div class="modal">
     <div class="modal-head"><h3>Sync run <span id="syncRunId">-</span> <span id="syncRunBadge"></span></h3><button class="btn-g btn-w btn-s" id="syncPauseBtn" onclick="togglePauseSync()" style="display:none">暂停</button><button class="btn-g" id="syncCloseBtn" onclick="closeSyncModal()">关闭</button></div>
     <div class="modal-body">
+      <div class="evlog" id="syncEvents"></div>
       <div class="progress-track"><div class="progress-bar" id="syncBar" style="width:0%"></div></div>
       <div class="progress-info">
         <span id="syncStage">-</span>
@@ -309,7 +316,6 @@ a.link:hover{color:var(--muted)}
         <span class="pager-info" id="syncTasksInfo">-</span>
         <button class="btn-g btn-s" id="syncTasksNext" onclick="syncTasksNav(1)" disabled>下一页</button>
       </div>
-      <div class="evlog" id="syncEvents"></div>
     </div>
   </div>
 </div>
@@ -361,6 +367,18 @@ async function loadInfo(){
     $('#badgeSnapshots').textContent=info.snapshot_count;
     $('#stripStats').innerHTML=`SRC <b>${info.source_count||0}</b> · ASSETS <b>${(info.asset_count||0).toLocaleString()}</b> · SNAP <b>${info.snapshot_count||0}</b>`;
   }catch(e){toast('加载统计失败: '+e.message,'err');}
+}
+
+// ------------------------------------------------------------ 集群状态
+function fmtNum(n){return Number.isInteger(n)?n:(n||0).toFixed(1);}
+async function pollCluster(){
+  try{
+    const s=await api('/api/cluster/status');
+    const dot=$('#clusterDot'),cpu=$('#clusterCpu');
+    if(!s.initialized){dot.className='dot down';cpu.textContent='stopped';return;}
+    dot.className='dot up';
+    cpu.textContent=`CPU ${fmtNum(s.available_cpus)}/${fmtNum(s.total_cpus)} · TASKS ${s.running_tasks} · NODES ${s.alive_nodes}`;
+  }catch(e){$('#clusterDot').className='dot down';$('#clusterCpu').textContent='n/a';}
 }
 
 // ---------------------------------------------------------------- 数据源页
@@ -661,6 +679,8 @@ async function loadDownloads(){
 
 showPage('sources');
 loadInfo();
+pollCluster();
+setInterval(pollCluster,5000);
 </script>
 </body>
 </html>

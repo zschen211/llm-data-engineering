@@ -209,6 +209,8 @@ resolve（列文件清单，driver 侧 1 次）
 - 暂停语义不变：`pause_sync`/`resume_sync` 切换 run 状态，任务与 driver 在文件边界轮询停泊（persist 前不落库）
 - `ray` 是项目核心依赖（`[project.dependencies]`），同步直接可用，无需额外 extra
 
+**集群生命周期**：Ray 集群由进程级单例 `services/cluster.ClusterManager` 统一持有——Web 应用在 lifespan 启动时 `ensure_started()`（一次 init，之后每次同步零初始化开销），关闭时 `stop()`；`run_ray_sync` 只做幂等检查。集群被外部（如测试 fixture）初始化时只读复用、不接管关闭。状态通过 `GET /api/cluster/status` 暴露（dashboard URL、CPU 总量/可用、存活节点、运行中任务/actor 数），Web UI 顶栏每 5 秒轮询显示；可用 `LLAVA_RAY_NUM_CPUS` / `LLAVA_RAY_ADDRESS` 环境变量配置（连接外部常驻集群时由外部管理生命周期）。`ray[default]` 提供 dashboard 与 State API（`ray.util.state`）支撑监控。
+
 全程写入 `downloads` 表（status/attempts/error），Web UI 可见失败原因与重试入口。
 
 ## 8. CLI 命令设计（`llava-instruct asset`）
