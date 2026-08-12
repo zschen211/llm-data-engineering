@@ -1,0 +1,9 @@
+# Ray runtime-env packaging guard: any process (driver, dashboard subprocess
+# modules) that zips the project root as a working_dir must skip runtime
+# data. Unlike `runtime_env.excludes`, this file is read from disk at
+# packaging time, so it cannot be stripped from a serialized job config.
+data/
+dist/
+pool/
+.pytest_cache/
+.ruff_cache/

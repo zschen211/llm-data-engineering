@@ -33,6 +33,28 @@ uv run python scripts/rustfs_smoke.py    # 真实后端集成冒烟测试
 
 不设置 `RUSTFS_ENDPOINT` 时自动使用本地磁盘后端（`data/blobs/`）。
 
+## 可观测性
+
+服务自带 Prometheus 埋点（`services/obs.py`：进程 / HTTP / Ray 集群与任务指标，`/metrics` 端点）+ 结构化事件流（`events.jsonl`，与日志同目录、gzip 轮转）。可视化用 docker compose 起的 Prometheus + Grafana：
+
+```bash
+docker compose up -d prometheus grafana node-exporter
+# Grafana   : http://localhost:3000  （admin / $GRAFANA_ADMIN_PASSWORD，默认 admin）
+# Prometheus: http://localhost:9090  （抓取 llava :8000/metrics + Ray dashboard :8265/metrics + 主机指标）
+```
+
+- 启动服务后 `scripts/obs_check.sh` 冒烟：校验 compose 配置、抓取目标全部 up、`/metrics` 可达。
+- 指标名带 `llava_` 前缀，与 Ray dashboard 自身指标不冲突；dashboard 由 `grafana/provisioning/` 自动加载（进程 CPU/内存、HTTP QPS 与 P95、Ray 节点/任务/actor、任务吞吐与耗时、宿主机资源）。
+- 事件流 JSON 每行一条：`{"ts", "project", "pid", "event", "level", "fields"}`，包含 `ray_cluster_started/stopped`、`sync_run_started/finished`、`ray_task_finished`，可用 `jq` 直接分析。
+- Ray 自身日志固定在 session 目录（`/api/cluster/status` 返回 `logs_dir`），不再混入 uvicorn stderr。
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `LLAVA_OBS_DIR` | 同日志目录 | 事件流 `events.jsonl` 输出目录 |
+| `LLAVA_OBS_INTERVAL` | `5` | 采样线程间隔（秒） |
+| `LLAVA_OBS_MAX_BYTES` / `LLAVA_OBS_BACKUPS` | `50MB` / `5` | 事件流轮转大小与 gzip 备份数 |
+| `LLAVA_RAY_METRICS_PORT` | `8080` | Ray metrics agent 的 Prometheus 端口（固定，供抓取） |
+
 ## 统一对外 API
 
 其他模块（数据处理流水线、notebook、测试）**只通过 `llava_instruct.assets.api` 访问资产层**，不直接触碰 Database/StorageBackend 内部：

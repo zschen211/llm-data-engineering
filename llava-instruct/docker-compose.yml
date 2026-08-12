@@ -55,9 +55,51 @@ services:
       "
     restart: "no"
 
+  # --- Observability stack: scrape the app / metrics endpoint, the Ray
+  # dashboard (port 8265) and host metrics; visualize in Grafana (port 3000).
+  # Usage: docker compose up -d prometheus grafana node-exporter
+  #   Grafana : http://localhost:3000  (admin / $GRAFANA_ADMIN_PASSWORD, default admin)
+  #   Prometheus : http://localhost:9090
+  # Prometheus runs on the host network because the Ray cluster lives inside
+  # the uvicorn process: only the host netns can reach ports 8000/8265.
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-docker.m.daocloud.io/prom/prometheus:latest}
+    container_name: obs-prometheus
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-docker.m.daocloud.io/grafana/grafana:latest}
+    container_name: obs-grafana
+    # Host network: the container hits Prometheus at localhost:9090, which
+    # a bridge network cannot reach (host firewall drops host-gateway hops
+    # for container-originated traffic). Datasource URL: http://localhost:9090.
+    network_mode: host
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+
+  node-exporter:
+    image: ${NODE_EXPORTER_IMAGE:-docker.m.daocloud.io/prom/node-exporter:latest}
+    container_name: obs-node-exporter
+    network_mode: host
+    restart: unless-stopped
+
 volumes:
   rustfs_data_0:
   rustfs_data_1:
   rustfs_data_2:
   rustfs_data_3:
   rustfs_logs:
+  prometheus_data:
+  grafana_data:

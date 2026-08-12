@@ -13,7 +13,23 @@ Configuration (read once at construction):
   - ``LLAVA_RAY_NUM_CPUS``: CPU resources for the local cluster
     (default: all cores);
   - ``LLAVA_RAY_ADDRESS``: attach to an existing Ray cluster instead of
-    starting a local one (the web app then manages nothing, only monitors).
+    starting a local one (the web app then manages nothing, only monitors);
+  - ``LLAVA_RAY_METRICS_PORT``: fixed Prometheus metrics port for the local
+    cluster's metrics agent (default 8080). Ray serves its native metrics
+    from this agent, not from the dashboard port, so Prometheus can scrape
+    a stable target;
+  - ``RAY_ENABLE_UV_RUN_RUNTIME_ENV``: forced to 0 by the package import
+    (see ``llava_instruct/__init__.py``), before ``ray`` is imported, so the
+    uv-run hook never injects ``working_dir=<cwd>`` — the dashboard's
+    subprocess modules would otherwise repackage the whole project root
+    without ``excludes`` and blow up node memory. The ``excludes`` passed
+    below only shrink the driver's own package; they are stripped from the
+    serialized job config that child drivers (ServeHead etc.) inherit.
+
+Observability: driver/worker logs stay in the Ray session dir (``logs_dir``
+in ``status``); ``RAY_LOG_TO_DRIVER`` is forced to 0 so Ray never mixes its
+output into uvicorn's stderr. ``status`` also reports the live
+``metrics_port``.
 """
 
 from __future__ import annotations
@@ -26,6 +42,12 @@ from ray.util.state import list_actors, list_nodes, list_tasks
 
 NUM_CPUS_ENV = "LLAVA_RAY_NUM_CPUS"
 ADDRESS_ENV = "LLAVA_RAY_ADDRESS"
+METRICS_PORT_ENV = "LLAVA_RAY_METRICS_PORT"
+METRICS_PORT_DEFAULT = 8080
+# Ray streams worker stdout/stderr to the driver's stderr by default
+# (RAY_LOG_TO_DRIVER=1); flip it so all Ray logs stay in the session log
+# files and never mix into uvicorn's stderr.
+RAY_LOG_TO_DRIVER_ENV = "RAY_LOG_TO_DRIVER"
 
 
 class ClusterManager:
@@ -38,8 +60,17 @@ class ClusterManager:
         self._address = (
             address if address is not None else os.environ.get(ADDRESS_ENV, "")
         )
+        self._metrics_port = self._env_int(METRICS_PORT_ENV, METRICS_PORT_DEFAULT)
         self._dashboard_url = ""
         self._gcs_address = ""
+        self._logs_dir = ""
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        try:
+            return int(os.environ[name])
+        except (KeyError, ValueError):
+            return default
 
     @staticmethod
     def _default_num_cpus() -> int:
@@ -54,14 +85,35 @@ class ClusterManager:
             if ray.is_initialized():
                 return
             self._owned = True
+            os.environ.setdefault(RAY_LOG_TO_DRIVER_ENV, "0")
             context = ray.init(
                 num_cpus=self._num_cpus,
                 address=self._address or None,
                 ignore_reinit_error=True,
                 runtime_env={"excludes": ["**"]},
+                _metrics_export_port=self._metrics_port,
             )
             self._dashboard_url = context.dashboard_url or ""
             self._gcs_address = context.address_info.get("gcs_address", "") or ""
+            self._logs_dir = self._read_session_logs_dir()
+
+    @staticmethod
+    def _read_session_logs_dir() -> str:
+        """Path of the Ray session log directory (worker/driver logs)."""
+        try:
+            node = ray._private.worker.global_worker.node
+            return node.get_logs_dir_path() or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _read_metrics_port() -> int:
+        """Live Prometheus metrics port of the metrics agent (0 when down)."""
+        try:
+            node = ray._private.worker.global_worker.node
+            return int(node.metrics_export_port) or 0
+        except Exception:
+            return 0
 
     def stop(self) -> None:
         """Shut down the cluster only if this manager started it."""
@@ -77,6 +129,8 @@ class ClusterManager:
                 "initialized": False,
                 "address": self._gcs_address,
                 "dashboard_url": self._dashboard_url,
+                "logs_dir": self._logs_dir,
+                "metrics_port": self._metrics_port,
                 "total_cpus": 0,
                 "available_cpus": 0,
                 "alive_nodes": 0,
@@ -86,6 +140,7 @@ class ClusterManager:
             if not ray.is_initialized():
                 return base
             base["initialized"] = True
+            base["metrics_port"] = self._read_metrics_port()
             base["total_cpus"] = ray.cluster_resources().get("CPU", 0)
             base["available_cpus"] = ray.available_resources().get("CPU", 0)
             try:

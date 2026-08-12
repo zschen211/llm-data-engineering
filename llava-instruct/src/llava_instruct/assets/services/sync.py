@@ -11,6 +11,7 @@ Covers the remote HF sync (``sync_source``, Ray-based) and the local import
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from .downloaders.base import Candidate, RemoteRef, image_size, sha256_of
 from .downloaders.download import DownloadStage
 from .downloaders.persist import PersistStage
 from .downloaders.ray_sync import BackendConfig, SyncConfig, run_ray_sync
+from .obs import observability
 
 logger = get_logger("assets.services.sync")
 
@@ -138,6 +140,10 @@ class SyncService:
         stage = DownloadStage.from_source(source, hub=hub)
         report = SyncReport(source_id=source.id, source_kind=source.kind)
         total_remotes = 0
+        started = time.perf_counter()
+        observability.event(
+            "sync_run_started", run_id=run_id, source_id=source.id, kind=source.kind
+        )
 
         def event(stage: str, message: str, level: str = "info") -> None:
             self._db.append_sync_event(run_id, stage, "", level, message)
@@ -173,10 +179,28 @@ class SyncService:
                     total_remotes,
                 )
             self._finish_sync(run_id, report, event)
+            observability.event(
+                "sync_run_finished",
+                run_id=run_id,
+                source_id=source.id,
+                resolved=report.resolved,
+                new=report.new,
+                skipped=report.skipped_existing,
+                failed=report.failed,
+                duration_s=round(time.perf_counter() - started, 3),
+            )
         except Exception as exc:
             self._db.update_sync_run(run_id, status="failed", error=str(exc))
             self._db.append_sync_event(run_id, "error", "", "error", f"同步失败: {exc}")
             logger.error("run=%s 同步失败: %s", run_id, exc)
+            observability.event(
+                "sync_run_failed",
+                level="error",
+                run_id=run_id,
+                source_id=source.id,
+                error=str(exc),
+                duration_s=round(time.perf_counter() - started, 3),
+            )
             raise
         return report
 
@@ -369,6 +393,10 @@ class SyncService:
             )
 
         run_id = self._db.create_sync_run(source.id)
+        started = time.perf_counter()
+        observability.event(
+            "sync_run_started", run_id=run_id, source_id=source.id, kind="local"
+        )
         logger.info("run=%s 本地导入开始 source=%s dir=%s", run_id, source.id, path)
         self._db.append_sync_event(run_id, "scan", "", "info", f"扫描目录: {path}")
         persister = PersistStage(self.backend, self._db)
@@ -399,6 +427,16 @@ class SyncService:
             report.new,
             report.skipped_existing,
             report.failed,
+        )
+        observability.event(
+            "sync_run_finished",
+            run_id=run_id,
+            source_id=source.id,
+            resolved=report.resolved,
+            new=report.new,
+            skipped=report.skipped_existing,
+            failed=report.failed,
+            duration_s=round(time.perf_counter() - started, 3),
         )
         return report
 

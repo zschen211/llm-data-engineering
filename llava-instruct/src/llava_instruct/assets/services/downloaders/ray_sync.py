@@ -32,6 +32,7 @@ from ...meta.db import Database
 from ...meta.models import Source
 from ...storage import LocalStorageBackend, S3StorageBackend, StorageBackend
 from ..cluster import cluster_manager
+from ..obs import observability
 
 # side-effect import: registers the built-in processors (register_processor)
 from . import processors  # noqa: F401  # pylint: disable=unused-import
@@ -253,11 +254,18 @@ def run_ray_sync(
 
     task = ray.remote(_sync_file_task).options(max_retries=2)
     pending: dict[object, RemoteRef] = {}
+    submitted_at: dict[object, float] = {}
     outcomes: list[FileOutcome] = []
     iterator = iter(remotes)
+
+    def submit(remote: RemoteRef) -> None:
+        ref = task.remote(cfg, remote)
+        pending[ref] = remote
+        submitted_at[ref] = time.perf_counter()
+        observability.submit_ray_task()
+
     for _ in range(min(max(1, cfg.workers), len(remotes))):
-        remote = next(iterator)
-        pending[task.remote(cfg, remote)] = remote
+        submit(next(iterator))
 
     db = Database(cfg.db_path, mark_stale=False)
     try:
@@ -269,6 +277,7 @@ def run_ray_sync(
                 continue
             for ref in ready:
                 remote = pending.pop(ref)
+                duration = time.perf_counter() - submitted_at.pop(ref, 0.0)
                 try:
                     outcome = ray.get(ref)
                 except Exception as exc:
@@ -281,10 +290,20 @@ def run_ray_sync(
                     outcome = FileOutcome(
                         remote=remote.name, failed=1, errors=[f"{remote.name}: {exc}"]
                     )
+                observability.record_ray_task(
+                    succeeded=outcome.failed == 0, duration=duration
+                )
+                observability.event(
+                    "ray_task_finished",
+                    run_id=cfg.run_id,
+                    remote=remote.name,
+                    status="ok" if outcome.failed == 0 else "failed",
+                    duration_s=round(duration, 3),
+                )
                 outcomes.append(outcome)
                 next_remote = next(iterator, None)
                 if next_remote is not None:
-                    pending[task.remote(cfg, next_remote)] = next_remote
+                    submit(next_remote)
     finally:
         db.close()
     return outcomes

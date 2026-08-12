@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from ...log import persist_uvicorn_logs, setup_logging
 from ..api import AssetStore, open_store
 from ..services.cluster import cluster_manager
+from ..services.obs import MetricsMiddleware, observability
 from .assets import make_router as assets_router
 from .cluster import make_router as cluster_router
 from .downloads import make_router as downloads_router
@@ -32,9 +33,22 @@ async def _lifespan(app: FastAPI):
     # by every sync (run_ray_sync only ensures it is up). If the cluster was
     # already initialized by someone else, it is reused and not shut down.
     cluster_manager.ensure_started()
+    observability.start()
+    status = cluster_manager.status()
+    if status["initialized"]:
+        observability.event(
+            "ray_cluster_started",
+            dashboard_url=status["dashboard_url"],
+            gcs_address=status["address"],
+            logs_dir=status["logs_dir"],
+            metrics_port=status["metrics_port"],
+            total_cpus=status["total_cpus"],
+        )
     try:
         yield
     finally:
+        observability.event("ray_cluster_stopped")
+        observability.stop()
         cluster_manager.stop()
 
 
@@ -43,6 +57,8 @@ def create_app(store: AssetStore) -> FastAPI:
     app = FastAPI(
         title="llava-instruct asset manager", version="0.1.0", lifespan=_lifespan
     )
+    app.add_middleware(MetricsMiddleware)
+    app.mount("/metrics", observability.metrics_app())
     for router in (
         info_router(store),
         sources_router(store),
