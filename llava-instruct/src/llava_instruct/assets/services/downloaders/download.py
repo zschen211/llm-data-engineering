@@ -5,8 +5,9 @@ Responsibilities (network-bound, huggingface only):
   - download: single-file fetch with retry and backoff, reporting per-file
     byte progress through an ``on_event`` callback
 
-Parallelism is provided by the caller: the Ray sync driver runs one task per
-file (``ray_sync._sync_file_task``). Tests inject a fake hub via ``hub=``.
+Parallelism is provided by the caller: the Ray Data sync pipeline runs one
+row function per file (``ray_data_sync._download_row``). Tests inject a fake
+hub via ``hub=``.
 """
 
 from __future__ import annotations
@@ -115,6 +116,7 @@ class DownloadStage:
         self.ignore_patterns = ignore_patterns
         self.attempts = max(1, attempts)
         self.hub = hub  # injectable for tests; None → real huggingface_hub
+        self.attempts_used = 0  # set by download(): attempts taken last call
 
     @staticmethod
     def from_source(source, hub=None) -> DownloadStage:
@@ -134,6 +136,14 @@ class DownloadStage:
 
     def _hub(self):
         return self.hub or huggingface_hub
+
+    def commit_hash(self) -> str:
+        """Latest commit sha of the repo ("" when the hub cannot report it)."""
+        try:
+            info = self._hub().repo_info(self.repo_id, repo_type=self.repo_type)
+            return getattr(info, "sha", "") or ""
+        except Exception:
+            return ""
 
     def resolve(self) -> list[RemoteRef]:
         hub = self._hub()
@@ -176,6 +186,7 @@ class DownloadStage:
         last_error: Exception | None = None
         tqdm_class = _progress_tqdm_class(on_event, remote.name) if on_event else None
         for attempt in range(self.attempts):
+            self.attempts_used = attempt + 1
             try:
                 cached = hub.hf_hub_download(
                     self.repo_id,

@@ -81,25 +81,42 @@ def test_ray_gauges_reflect_cluster(ray_runtime, tmp_path):
     store.close()
 
 
-def test_task_counters_and_duration_histogram():
-    observability.submit_ray_task()
-    observability.submit_ray_task()
-    observability.record_ray_task(succeeded=True, duration=0.5)
-    observability.record_ray_task(succeeded=False, duration=1.5)
+def test_sync_stage_and_item_metrics():
+    observability.stage_finished(
+        "run_1",
+        "download_raw",
+        12.5,
+        item_count=3,
+        failed_count=1,
+        retry_app=2,
+        retry_ray=1,
+    )
+    observability.item_finished("run_1", "download_raw", "done", 1.0)
+    observability.item_finished("run_1", "download_raw", "done", 2.0)
+    observability.item_finished("run_1", "persist", "new", 0.3)
     text = _metrics_text()
     assert (
-        float(_metric_lines(text, "llava_ray_tasks_submitted_total ")[0].split()[-1])
-        == 2.0
+        'llava_sync_stage_duration_seconds_count{run_id="run_1",stage="download_raw"} 1.0'
+        in text
     )
     assert (
-        float(_metric_lines(text, "llava_ray_tasks_succeeded_total ")[0].split()[-1])
-        == 1.0
+        'llava_sync_items_total{run_id="run_1",stage="download_raw",status="done"} 2.0'
+        in text
     )
     assert (
-        float(_metric_lines(text, "llava_ray_tasks_failed_total ")[0].split()[-1])
-        == 1.0
+        'llava_sync_items_total{run_id="run_1",stage="persist",status="new"} 1.0'
+        in text
     )
-    assert "llava_ray_task_duration_seconds_count 2.0" in text
+    assert (
+        'llava_sync_retries_total{kind="app",run_id="run_1",stage="download_raw"} 2.0'
+        in text
+    )
+    assert (
+        'llava_sync_retries_total{kind="ray",run_id="run_1",stage="download_raw"} 1.0'
+        in text
+    )
+    assert 'llava_sync_failures_total{run_id="run_1",stage="download_raw"} 1.0' in text
+    assert "llava_sync_item_duration_seconds_count" in text
 
 
 def test_event_sink_writes_jsonl(tmp_path):

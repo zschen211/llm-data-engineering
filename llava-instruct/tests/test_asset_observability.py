@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
+import ray
 from fakehub import CrashingHub, FailingHub, FakeHub
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -98,16 +99,18 @@ def test_sync_run_failed(tmp_path, ray_runtime):
 
 
 def test_sync_crash_retried_then_reported(tmp_path, ray_runtime):
-    """A task that kills its worker is retried by Ray and, once retries are
-    exhausted, counted as a per-file failure — the run itself completes."""
+    """A task that keeps killing its worker is retried by Ray Data; once the
+    retries are exhausted the pipeline aborts and the run is marked failed.
+    The raw-layer state (attempts) is kept for a later resume."""
     with open_store(data_dir=tmp_path / "data") as store:
         source = _add_hf_source(store)
-        report = store.sync_source(source.id, hub=CrashingHub())
-        assert report.resolved == 3
-        assert report.failed == 3
+        with pytest.raises(ray.exceptions.WorkerCrashedError):
+            store.sync_source(source.id, hub=CrashingHub())
         run = store.list_sync_runs()[0]
-        assert run["status"] == "done"
-        assert run["failed_files"] == 3
+        assert run["status"] == "failed"
+        raws = store.list_raw_files(source.id)
+        assert raws, "crashed tasks must leave their raw-layer state behind"
+        assert any(r["attempts"] >= 2 for r in raws)  # Ray 重试至少发生一次
 
 
 def test_start_sync_rejects_running_run(tmp_path):
@@ -145,8 +148,9 @@ def test_pause_resume_invalid_transitions(tmp_path):
 
 
 def test_sync_pause_halts_between_files_and_resume_continues(tmp_path, ray_runtime):
-    """Pause parks tasks between files (no new file is persisted while
-    paused), resume picks up the remaining files and finishes the run."""
+    """Pause parks the driver between outcome rows (pull-based backpressure):
+    raw uploads in flight finish, but Phase B never starts while paused.
+    Resume picks the run up and finishes it."""
     gate = tmp_path / "gate"
     hub = FakeHub(gate_path=str(gate), gated_suffix="c.png")
     with open_store(data_dir=tmp_path / "data") as store:
@@ -159,18 +163,17 @@ def test_sync_pause_halts_between_files_and_resume_continues(tmp_path, ray_runti
         )
         thread.start()
         try:
-            for _ in range(400):  # 等 a/b 两个文件落库（c 被 gate 阻塞）
-                if store.count_assets() >= 2:
+            for _ in range(400):  # 等 a/b 两个文件上传 raw 层（c 被 gate 阻塞）
+                if len(store.list_raw_files(source.id)) >= 2:
                     break
                 time.sleep(0.05)
             run = store.list_sync_runs()[0]
-            paused_at = store.count_assets()
             store.pause_sync(run["id"])
             assert store.get_sync_run(run["id"])["status"] == "paused"
 
-            gate.write_text("")  # c.png 下载完成，但 pause 期间 task 在 persist 前停泊
+            gate.write_text("")  # c.png 完成下载上传，但 driver 已停驻
             time.sleep(0.8)
-            assert store.count_assets() == paused_at
+            assert store.count_assets() == 0  # Phase B 在暂停期间不会启动
 
             store.resume_sync(run["id"])
             thread.join(timeout=60)
@@ -313,9 +316,9 @@ def test_sources_api_reports_running_run(tmp_path, ray_runtime):
         store.close()
 
 
-def test_pipeline_processes_file_without_waiting_for_others(tmp_path, ray_runtime):
-    """Per-file pipeline: file A finishes download->process->persist while
-    file B is still blocked mid-download (no whole-batch wait)."""
+def test_two_phase_pipeline_uploads_raw_before_assets(tmp_path, ray_runtime):
+    """Phase A must fully populate the raw layer before Phase B persists any
+    asset: no asset exists while a download is still blocked."""
     gate = tmp_path / "gate"
     hub = FakeHub(
         files=["data/a.png", "data/b.png"], gate_path=str(gate), gated_suffix="b.png"
@@ -329,21 +332,22 @@ def test_pipeline_processes_file_without_waiting_for_others(tmp_path, ray_runtim
             daemon=True,
         )
         thread.start()
+        try:
+            for _ in range(400):  # a.png 已上传 raw 层，b.png 仍在下载
+                if len(store.list_raw_files(source.id)) >= 1:
+                    break
+                time.sleep(0.05)
+            assert store.count_assets() == 0, "b.png 未下载完，资产层必须为空"
 
-        # while b.png is blocked downloading, a.png must already be persisted
-        persisted = 0
-        for _ in range(400):
-            persisted = store.count_assets()
-            if persisted >= 1:
-                break
-            time.sleep(0.05)
-        assert persisted == 1, "pipeline 必须不等 b.png 下载完成即可持久化 a.png"
-
-        gate.write_text("")
-        thread.join(timeout=60)
-        assert store.count_assets() == 2
-        run = store.list_sync_runs()[0]
-        assert run["status"] == "done"
+            gate.write_text("")
+            thread.join(timeout=60)
+            assert store.count_assets() == 2
+            assert len(store.list_raw_files(source.id)) == 2
+            run = store.list_sync_runs()[0]
+            assert run["status"] == "done"
+        finally:
+            gate.write_text("")
+            thread.join(timeout=60)
 
 
 # ------------------------------------------------------------ unified logging

@@ -55,14 +55,25 @@
 - `9001`：Web console（默认凭据 `rustfsadmin / rustfsadmin`，生产必须修改）
 - 数据目录持久化挂载，运行时用户 `10001:10001`
 
-**Bucket 布局**：
+**Bucket 布局**（双层：原始层 + 资产层）：
 
 ```
 llava-assets/
-└── blobs/<sha256[:2]>/<sha256><ext>     # 内容寻址：同内容只存一份（跨源去重）
+├── raw/<source_id>/<path_in_repo>       # 原始层：HF 仓库镜像，路径寻址（不去重）
+└── blobs/<sha256[:2]>/<sha256><ext>     # 资产层：内容寻址：同内容只存一份（跨源去重）
 ```
 
-- object key 由内容 sha256 决定 → 内容不变则 key 不变，版本天然绑定内容
+分层职责：
+
+| 层 | 寻址 | 语义 | 消费者 |
+| --- | --- | --- | --- |
+| `raw/` 原始层 | 路径（source_id 前缀，按源管理/删除/GC） | 下载镜像，与 repo 文件一一对应，`raw_files` 表登记 sha256/size/commit | Phase B 处理任务、reprocess |
+| `blobs/` 资产层 | 内容 sha256（内容不变则 key 不变，版本天然绑定内容） | 处理后的最终资产，唯一权威 | API server（preview/download/查询） |
+
+分层收益（管理与重试）：
+
+- **重试分层**：处理失败 → 只重跑 Phase B（raw 已入库，零网络）；下载失败 → 只补 Phase A；换 processor → 无需重新下载
+- **幂等分层**：Phase A 以 `raw_files.status` + sha256 校验判重；Phase B 以 sha256 去重（`BEGIN IMMEDIATE`）判重
 - 下载临时区在本地 `data/tmp/`，校验通过后上传
 
 **版本化策略**：SQLite `asset_versions` 为权威；RustFS bucket 层版本化默认关闭（避免存储翻倍），需要时可按 bucket 开启作为额外保护。
@@ -126,6 +137,24 @@ snapshots (id TEXT PRIMARY KEY, manifest_sha1 TEXT, asset_count INTEGER, created
 snapshot_assets (snapshot_id TEXT REFERENCES snapshots(id),
                  asset_id TEXT REFERENCES assets(id), asset_version INTEGER,
                  PRIMARY KEY (snapshot_id, asset_id))
+
+raw_files (
+  source_id TEXT NOT NULL, path_in_repo TEXT NOT NULL,
+  object_key TEXT NOT NULL,              -- raw/<source_id>/<path_in_repo>
+  sha256 TEXT, size INTEGER,
+  status TEXT DEFAULT 'pending',         -- pending / uploaded / failed
+  commit_hash TEXT, attempts INTEGER DEFAULT 0, error TEXT,
+  created_at TEXT, updated_at TEXT,
+  PRIMARY KEY(source_id, path_in_repo)
+)
+
+sync_stages (
+  run_id TEXT, stage TEXT,               -- resolve / download_raw / process / persist
+  started_at TEXT, finished_at TEXT,
+  duration_s REAL, item_count INTEGER DEFAULT 0, failed_count INTEGER DEFAULT 0,
+  retry_app INTEGER DEFAULT 0, retry_ray INTEGER DEFAULT 0,
+  PRIMARY KEY(run_id, stage)
+)
 ```
 
 ## 5. 版本管理设计（两层）
@@ -192,26 +221,75 @@ class Candidate:     # process 的输出/persist 的输入
 
 **本地目录导入**（`services/sync.import_dir`）不走网络管线：直接扫描目录 → 分类 → 构造 Candidate → 交给 PersistStage，作为 store 级便捷 API 保留。
 
-### sync 流程（Ray 逐文件任务）
+### sync 流程（Ray Data 两阶段管线）
 
-**执行模型**：`ray_sync.run_ray_sync` 为每个文件提交一个 Ray 任务（独立进程），`workers` 个任务构成滑动窗口在途执行——某文件下载完成立即进入 process/persist，**不等其他文件**（`ray.wait` 按完成顺序取回）：
+**执行模型**：`sync_source` 由两条 Ray Data 流式管线驱动，替代手搓滑动窗口——分片、并行度、崩溃重试（`max_task_retries`）、背压全部交给 Ray Data 原生能力：
 
 ```
-resolve（列文件清单，driver 侧 1 次）
-  → Ray 任务 ×N（params.workers，默认 2，滑动窗口）：
-       task_i(独立进程): download(重试+tqdm字节进度) → process(file/parquet) → persist(入库)
-  → driver 按完成顺序聚合 SyncReport + 更新 sync_run（done/failed/progress）
+Phase A 原始层入库（pipeline #1，网络 IO）
+  resolve（列文件清单，driver 侧 1 次）
+    → ray.data.from_items(pending raw 行)
+    → map(download_one, concurrency=workers, max_task_retries=2)
+         hf_hub_download(本地缓存) → 上传 raw/<source_id>/<path> → raw_files 登记
+    → driver iter_rows() 聚合进度（pull 停止 = 全管线背压停驻，即暂停语义）
+
+Phase B 资产层处理（pipeline #2，CPU/存储 IO）
+  ray.data.from_items(pending raw_files 行)
+    → flat_map(process_one, max_task_retries=2)   # 拉取 raw → processor → Candidate 行
+    → map(persist_one, max_task_retries=2)        # Candidate → blobs/ + assets 登记
+    → driver iter_rows() 聚合 SyncReport
 ```
 
-- 峰值暂存 = `workers × 1 个文件`（parquet 解码后立即删除），而非全量文件
-- **容错**：worker 进程崩溃（OOM/段错误等）由 Ray `max_retries=2` 自动重跑（下载幂等、persist 去重保证不重复登记）；应用层错误（网络/解析/持久化）在任务内捕获并计入 `FileOutcome`，只影响该文件
+- **中间行契约节点无关**：Candidate 行不携带本地路径（Ray Data 跨 op 不保证同 worker）——`file` processor 走 `source_key`（引用 raw 对象，persist 时后端 server-side copy：S3 `copy_object` / 本地 `copyfile`，零字节过对象存储）；`parquet` processor 走 `payload`（解码出的图片字节，经对象存储传递）
+- Phase B 中 process/persist 之间做一次 `materialize()` 边界：获得独立 stage 计时与重试隔离
+- **暂停语义**：Ray Data 是 pull-based 流式执行——driver 停止 `iter_rows()` 拉取即全管线背压停驻（in-flight 批次完成，缓冲有界），不再需要 worker 轮询 `paused()`；`pause_sync`/`resume_sync` 仍切换 run 状态
+- **容错**：worker 崩溃由 Ray Data `max_task_retries=2` 自动重跑（下载幂等：HF 缓存 + raw exists + sha256 校验；persist 幂等：内容寻址去重）；应用层错误（网络/解析/持久化）在任务内捕获进 outcome 行，只影响该文件/资产
 - **状态共享**：任务只通过 SQLite 通信——每个任务开自己的 `Database`（`mark_stale=False`，仅 driver 可标记 stale run）、按 `BackendConfig` 重建存储后端（boto3 client 不可序列化）；WAL + busy_timeout 兜底
-- 暂停语义不变：`pause_sync`/`resume_sync` 切换 run 状态，任务与 driver 在文件边界轮询停泊（persist 前不落库）
-- `ray` 是项目核心依赖（`[project.dependencies]`），同步直接可用，无需额外 extra
+- `ray[data]` 是项目核心依赖（`[project.dependencies]`），同步直接可用，无需额外 extra
 
-**集群生命周期**：Ray 集群由进程级单例 `services/cluster.ClusterManager` 统一持有——Web 应用在 lifespan 启动时 `ensure_started()`（一次 init，之后每次同步零初始化开销），关闭时 `stop()`；`run_ray_sync` 只做幂等检查。集群被外部（如测试 fixture）初始化时只读复用、不接管关闭。状态通过 `GET /api/cluster/status` 暴露（dashboard URL、CPU 总量/可用、存活节点、运行中任务/actor 数），Web UI 顶栏每 5 秒轮询显示；可用 `LLAVA_RAY_NUM_CPUS` / `LLAVA_RAY_ADDRESS` 环境变量配置（连接外部常驻集群时由外部管理生命周期）。`ray[default]` 提供 dashboard 与 State API（`ray.util.state`）支撑监控。
+**阶段驱动的管理入口**（利用 raw 层持久化）：
+
+| 入口 | 阶段 | 用途 |
+| --- | --- | --- |
+| `sync_source` | A → B | 完整同步（中断续跑：raw_files/sync_tasks 状态跳过已完成项） |
+| `reprocess_source` | 仅 B | 换 processor 后重新解析，零网络 |
+| `redownload_source` | 仅 A | 强制刷新 raw 层（sha256 校验） |
+
+**集群生命周期**：Ray 集群由进程级单例 `services/cluster.ClusterManager` 统一持有——Web 应用在 lifespan 启动时 `ensure_started()`（一次 init，之后每次同步零初始化开销），关闭时 `stop()`；`run_ray_data_sync` 只做幂等检查。集群被外部（如测试 fixture）初始化时只读复用、不接管关闭。状态通过 `GET /api/cluster/status` 暴露（dashboard URL、CPU 总量/可用、存活节点、运行中任务/actor 数），Web UI 顶栏每 5 秒轮询显示；可用 `LLAVA_RAY_NUM_CPUS` / `LLAVA_RAY_ADDRESS` 环境变量配置（连接外部常驻集群时由外部管理生命周期）。`ray[default]` 提供 dashboard 与 State API（`ray.util.state`）支撑监控。
 
 全程写入 `downloads` 表（status/attempts/error），Web UI 可见失败原因与重试入口。
+
+### 可观测性设计
+
+指标链路：Ray worker（独立进程，registry 不对外）→ outcome 行 → driver 聚合观测 → `/metrics`（uvicorn 进程内 `prometheus-client`）→ Prometheus（`llava-instruct` job，`:8000`；另有 `ray-metrics` `:8080` 与 `node-exporter` `:9100`）→ Grafana（host 网络，provisioning 自动加载 dashboard）。
+
+**分阶段耗时**（指标 + SQLite 双留档）：
+
+| 指标 | 类型 | 标签 | 记录点 |
+| --- | --- | --- | --- |
+| `llava_sync_stage_duration_seconds` | Histogram | `run_id, stage` | driver：每 run 每 stage 结束记 1 次（`resolve / download_raw / process / persist`） |
+| `llava_sync_item_duration_seconds` | Histogram | `run_id, stage` | driver 聚合 outcome 行：单文件（download_raw/process）/单资产（persist）耗时 |
+
+**文件 / 资产总量**：
+
+- `llava_sync_items_total` Counter `{run_id, stage, status}`，`status ∈ {done, skipped, failed}`；`stage=persist` 时 item = 资产（new=done / 去重=skipped），"总处理资产" = `sum(...{stage="persist"})`
+
+**错误 / 重试**：
+
+- `llava_sync_failures_total` Counter `{run_id, stage}`：任务级失败（含重试耗尽），与 item 级失败区分（一个 parquet 文件可含多个坏行）
+- `llava_sync_retries_total` Counter `{run_id, stage, kind}`：`kind="app"` 应用层指数退避重试；`kind="ray"` 任务重启（任务启动时 `attempts>1` 即 +1——Ray Data 重跑不告知任务身份，但会重走 attempts+1 代码路径，故 `sync_tasks/raw_files.attempts` 是权威重启计数）
+
+**SQLite 留档**：`sync_stages` 表（run × stage 一行：`duration_s/item_count/failed_count/retry_app/retry_ray`），端点 `GET /api/sync/runs/{id}/stages` 供 Web UI 展示，不受 Prometheus 保留期影响。
+
+**Grafana**：新 dashboard `llava-instruct Sync Pipeline`（`grafana/provisioning/dashboards/llava-sync-pipeline.json`，模板变量 `run_id`）：
+
+| Row | 面板 |
+| --- | --- |
+| 分阶段耗时 | 各阶段平均耗时（bar gauge，`rate(_sum)/rate(_count)` by stage）；各阶段平均单文件/单资产耗时（timeseries + P95）；单 run 阶段耗时明细（table，`$run` 过滤） |
+| 文件/资产 | 吞吐（stacked，`rate(llava_sync_items_total[1m]) by (stage, status)`）；累计处理资产（stat）；单 run 处理量 |
+| 错误/重试 | 重试速率（by kind）；失败速率（by stage）；失败率（失败/总量）；失败 Top runs（table）；Ray Data `ray_data_*` 补充（spilled bytes 等，版本相关） |
+
+指标基数说明：`run_id` 为低频标签（每天个位数 run），序列数 = run × stage × bucket，Prometheus 保留窗口内可控。
 
 ## 8. CLI 命令设计（`llava-instruct asset`）
 
@@ -243,6 +321,9 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 | GET/POST | `/api/sources` | 数据源列表/新增 |
 | PUT/DELETE | `/api/sources/{id}` | 修改/删除数据源 |
 | POST | `/api/sources/{id}/sync` | 触发下载同步 |
+| POST | `/api/sources/{id}/reprocess` | 仅重跑 Phase B（raw 已入库，零网络） |
+| GET | `/api/sources/{id}/raw` | raw 层文件清单（`raw_files` 表） |
+| GET | `/api/sync/runs/{id}/stages` | 各阶段耗时/重试留档（`sync_stages` 表） |
 | GET | `/api/assets` | 资产游标分页列表（`?tag=&type=&status=&source=&q=&cursor=&page_size=`，返回 `{items, next_cursor, page_size}`；`cursor` 为不透明 base64url token，翻页用返回的 `next_cursor`，无 `next_cursor` 即末页；标签与搜索在 SQL 侧求值） |
 | GET/DELETE | `/api/assets/{id}` | 资产详情/删除 |
 | POST/DELETE | `/api/assets/{id}/tags` | 打标/去标 |
@@ -260,7 +341,7 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 
 ### 依赖
 
-所有运行时依赖（ray、huggingface_hub、pyarrow、boto3、fastapi、uvicorn、pillow、tqdm）都在 `[project.dependencies]`（核心依赖，随 `uv sync` 自动安装），不使用动态 import 或运行时安装：
+所有运行时依赖（ray[data]、huggingface_hub、pyarrow、boto3、fastapi、uvicorn、pillow、tqdm、prometheus-client、psutil）都在 `[project.dependencies]`（核心依赖，随 `uv sync` 自动安装），不使用动态 import 或运行时安装：
 
 | extra | 包 | 用途 |
 | --- | --- | --- |
@@ -270,12 +351,13 @@ RUSTFS_ENDPOINT, RUSTFS_ACCESS_KEY, RUSTFS_SECRET_KEY, RUSTFS_BUCKET, LLAVA_DATA
 
 | 层 | 用例 |
 | --- | --- |
-| db | 八表 CRUD、sha256 唯一约束、版本历史、标签多对多、快照 |
-| storage | Local 内容寻址/去重；S3 后端用 moto（put/get/exists/流式） |
-| services/downloaders | local 导入分类；DownloadStage 重试/退避；PersistStage 事务去重 |
-| store | 端到端 sync（Ray）：resolve→下载→上传→登记→失败记录；并发去重；worker 崩溃重试；暂停/恢复 |
-| cli | init/source/import/sync/ls/tag/version/snapshot/export 全流程 |
-| web | TestClient：sources CRUD、资产筛选、打标、快照、预览 |
+| db | 八表 CRUD、sha256 唯一约束、版本历史、标签多对多、快照；raw_files / sync_stages CRUD |
+| storage | Local 内容寻址/去重；S3 后端用 moto（put/get/exists/流式 + put_object/copy_object） |
+| services/downloaders | local 导入分类；DownloadStage 重试/退避；PersistStage 事务去重；Ray Data 管线：分阶段跑（仅 A / 仅 B reprocess）、worker 崩溃重试（首跑抛异常验证 max_task_retries）、source_key 零拷贝与 payload 两条 persist 路径 |
+| store | 端到端 sync（Ray Data）：resolve→raw→blobs→登记→失败记录；并发去重；暂停（停拉即停驻）/恢复；中断续跑 |
+| obs | stage/item/retry 指标计数与 sync_stages 落库 |
+| cli | init/source/import/sync/reprocess/ls/tag/version/snapshot/export 全流程 |
+| web | TestClient：sources CRUD、资产筛选、打标、快照、预览、raw 清单、stages |
 
 ### 集成冒烟（真实 RustFS）
 

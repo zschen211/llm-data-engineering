@@ -45,6 +45,14 @@ def make_router(store: AssetStore) -> APIRouter:
     ):
         return store.get_sync_events(run_id, after_id=after, limit=limit)
 
+    @router.get("/api/sync/{run_id}/stages")
+    def get_sync_stages(run_id: str):
+        """Per-stage records of the run: wall time, item/failure counts and
+        app/Ray retry counters (durable mirror of the Prometheus metrics)."""
+        if store.get_sync_run(run_id) is None:
+            raise HTTPException(404, "sync run not found")
+        return store.get_sync_stages(run_id)
+
     @router.get("/api/sync/{run_id}/tasks")
     def get_sync_tasks(
         run_id: str,

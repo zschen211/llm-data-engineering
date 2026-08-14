@@ -57,6 +57,7 @@ _EVENTS_FILE = "events.jsonl"
 _MAX_BYTES = 50 * 1024 * 1024
 _BACKUP_COUNT = 5
 _TASK_BUCKETS = (0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300)
+_STAGE_BUCKETS = (1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600)
 
 _event_logger = logging.getLogger("llava_instruct.obs")
 
@@ -220,25 +221,38 @@ class Observability:
             ["method", "route"],
             registry=self._registry,
         )
-        self._tasks_submitted = Counter(
-            "llava_ray_tasks_submitted_total",
-            "Ray sync tasks submitted by the driver",
+        self._stage_duration = Histogram(
+            "llava_sync_stage_duration_seconds",
+            "Wall time of one sync stage per run",
+            ["run_id", "stage"],
+            buckets=_STAGE_BUCKETS,
             registry=self._registry,
         )
-        self._tasks_succeeded = Counter(
-            "llava_ray_tasks_succeeded_total",
-            "Ray sync tasks that completed without failure",
-            registry=self._registry,
-        )
-        self._tasks_failed = Counter(
-            "llava_ray_tasks_failed_total",
-            "Ray sync tasks that failed after all retries",
-            registry=self._registry,
-        )
-        self._task_duration = Histogram(
-            "llava_ray_task_duration_seconds",
-            "Wall time of one Ray sync task",
+        self._item_duration = Histogram(
+            "llava_sync_item_duration_seconds",
+            "Wall time of one item (file/asset) within a sync stage",
+            ["run_id", "stage"],
             buckets=_TASK_BUCKETS,
+            registry=self._registry,
+        )
+        self._sync_items = Counter(
+            "llava_sync_items_total",
+            "Items finished per sync stage (files for download_raw/process, "
+            "assets for persist)",
+            ["run_id", "stage", "status"],
+            registry=self._registry,
+        )
+        self._sync_failures = Counter(
+            "llava_sync_failures_total",
+            "Sync tasks that failed (including retry exhaustion)",
+            ["run_id", "stage"],
+            registry=self._registry,
+        )
+        self._sync_retries = Counter(
+            "llava_sync_retries_total",
+            "Retries observed per sync stage: app-level backoff attempts or "
+            "Ray task restarts",
+            ["run_id", "stage", "kind"],
             registry=self._registry,
         )
 
@@ -286,15 +300,46 @@ class Observability:
         self._http_requests.labels(method=method, route=route, status=str(status)).inc()
         self._http_duration.labels(method=method, route=route).observe(seconds)
 
-    def submit_ray_task(self) -> None:
-        self._tasks_submitted.inc()
+    def stage_finished(
+        self,
+        run_id: str,
+        stage: str,
+        duration_s: float,
+        item_count: int = 0,
+        failed_count: int = 0,
+        retry_app: int = 0,
+        retry_ray: int = 0,
+    ) -> None:
+        """Record one run's stage wall time; item/retry counters land in
+        ``item_finished``/``retry`` as items stream in."""
+        self._stage_duration.labels(run_id=run_id, stage=stage).observe(duration_s)
+        if failed_count:
+            self._sync_failures.labels(run_id=run_id, stage=stage).inc(failed_count)
+        if retry_app:
+            self._sync_retries.labels(run_id=run_id, stage=stage, kind="app").inc(
+                retry_app
+            )
+        if retry_ray:
+            self._sync_retries.labels(run_id=run_id, stage=stage, kind="ray").inc(
+                retry_ray
+            )
+        self.event(
+            "sync_stage_finished",
+            run_id=run_id,
+            stage=stage,
+            duration_s=round(duration_s, 3),
+            item_count=item_count,
+            failed_count=failed_count,
+            retry_app=retry_app,
+            retry_ray=retry_ray,
+        )
 
-    def record_ray_task(self, succeeded: bool, duration: float) -> None:
-        if succeeded:
-            self._tasks_succeeded.inc()
-        else:
-            self._tasks_failed.inc()
-        self._task_duration.observe(duration)
+    def item_finished(
+        self, run_id: str, stage: str, status: str, duration_s: float
+    ) -> None:
+        """One item (file/asset) finished within a stage."""
+        self._sync_items.labels(run_id=run_id, stage=stage, status=status).inc()
+        self._item_duration.labels(run_id=run_id, stage=stage).observe(duration_s)
 
     def _sample(self) -> None:
         self._sample_process()

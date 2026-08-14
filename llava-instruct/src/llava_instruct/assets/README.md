@@ -92,7 +92,7 @@ graph TD
 
 - **依赖方向单向向下**：routes → api → services →（meta / storage / downloaders / classify），models 只被上层使用，从不依赖上层。
 - **api.py 是纯组装层**：`AssetStore` 聚合 `services/` 各域服务类（mixin），只持有共享状态（`_db` / `backend`）并提供生命周期；对外方法签名不变。业务逻辑全在 `services/`。
-- **services/sync.py 是枢纽**：`sync_source` 组装 `SyncConfig` 交给 `services/downloaders/ray_sync`；本地导入则直接调用 `PersistStage`。
+- **services/sync.py 是枢纽**：`sync_source` 组装 `SyncConfig` 交给 `services/downloaders/ray_data_sync`（Phase A raw 入库 + Phase B 资产处理两条 Ray Data 管线）；本地导入则直接调用 `PersistStage`。
 - **meta/db.py 的 `transaction()`（BEGIN IMMEDIATE）是跨进程去重原语**：Ray worker / Web 线程并发写同一 sha256 时串行化，见 persist 阶段。
 - **routes 通过 api 取 store**（`default_app` → `open_store`），保证不绕过门面。
 - **downloaders 通过 `__init__.py` 的 import 副作用注册 processor**，services 包引入触发注册。
@@ -100,10 +100,12 @@ graph TD
 ## 数据流向
 
 ```
-source(s) → sync_source ──► ray_sync（每文件一个 Ray 任务）──► download → process → persist
-                                                                    │
+source(s) → sync_source ──► ray_data_sync（Ray Data 两阶段管线）
+                              │  Phase A：download → raw/ 层入库（raw_files 登记）
+                              │  Phase B：process（file/parquet）→ persist（blobs/ + assets）
+                              ▼
 本地 import_dir ──────────────────────────────────────────────────► persist ◄── db + storage
-                                                                    │
-                                                    Candidate（sha256 去重）→ storage.put_file + db.add_asset
+                                                                     │
+                                                     Candidate（sha256 去重）→ storage + db.add_asset
 下游流水线 ◄── materialize（backend.get_file 拉回本地） ◄── AssetStore
 ```

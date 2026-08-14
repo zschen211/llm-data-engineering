@@ -12,11 +12,11 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
 from .models import Asset, AssetVersion, Snapshot, Source, Tag
+from .sync_state import SyncStateMixin, utcnow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -133,22 +133,48 @@ CREATE TABLE IF NOT EXISTS sync_tasks (
   remote_id TEXT DEFAULT '',         -- stable across runs (sha1 of repo path)
   name TEXT DEFAULT '',
   path_in_repo TEXT DEFAULT '',
-  status TEXT DEFAULT 'pending',     -- pending / downloading / persisted / skipped / failed
+  status TEXT DEFAULT 'pending',     -- pending / downloading / downloaded / persisted / skipped / failed
   bytes_downloaded INTEGER DEFAULT 0,
   total_bytes INTEGER DEFAULT 0,
   fraction REAL,
-  attempts INTEGER DEFAULT 0,
+  attempts INTEGER DEFAULT 0,        -- download task starts (Phase A)
+  process_attempts INTEGER DEFAULT 0, -- process task starts (Phase B)
   error TEXT DEFAULT '',
   created_at TEXT DEFAULT '',
   updated_at TEXT DEFAULT '',
   UNIQUE (run_id, remote_id)
 );
 CREATE INDEX IF NOT EXISTS idx_sync_tasks_run ON sync_tasks(run_id);
+
+CREATE TABLE IF NOT EXISTS raw_files (
+  source_id TEXT NOT NULL,
+  path_in_repo TEXT NOT NULL,
+  object_key TEXT NOT NULL,           -- raw/<source_id>/<path_in_repo>
+  sha256 TEXT DEFAULT '',
+  size INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'pending',      -- pending / uploaded / failed
+  commit_hash TEXT DEFAULT '',
+  attempts INTEGER DEFAULT 0,
+  error TEXT DEFAULT '',
+  created_at TEXT DEFAULT '',
+  updated_at TEXT DEFAULT '',
+  PRIMARY KEY (source_id, path_in_repo)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_files_source ON raw_files(source_id, status);
+
+CREATE TABLE IF NOT EXISTS sync_stages (
+  run_id TEXT NOT NULL,
+  stage TEXT NOT NULL,                -- resolve / download_raw / process / persist
+  started_at TEXT DEFAULT '',
+  finished_at TEXT DEFAULT '',
+  duration_s REAL DEFAULT 0.0,
+  item_count INTEGER DEFAULT 0,
+  failed_count INTEGER DEFAULT 0,
+  retry_app INTEGER DEFAULT 0,
+  retry_ray INTEGER DEFAULT 0,
+  PRIMARY KEY (run_id, stage)
+);
 """
-
-
-def utcnow() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def new_id(prefix: str = "") -> str:
@@ -164,7 +190,7 @@ def _snapshot_hash(assets: list[Asset]) -> str:
     return hashlib.sha1(payload.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
-class Database:
+class Database(SyncStateMixin):
     """Thin sqlite3 wrapper: schema init + typed CRUD for the asset layer."""
 
     def __init__(self, path: Path, mark_stale: bool = True):
@@ -222,6 +248,13 @@ class Database:
                 }
                 if "fraction" not in cols:
                     raise
+        task_cols = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(sync_tasks)")
+        }
+        if "process_attempts" not in task_cols:
+            self._conn.execute(
+                "ALTER TABLE sync_tasks ADD COLUMN process_attempts INTEGER DEFAULT 0"
+            )
 
     @contextmanager
     def transaction(self):
@@ -858,6 +891,7 @@ class Database:
         "total_bytes",
         "fraction",
         "attempts",
+        "process_attempts",
         "error",
     )
 

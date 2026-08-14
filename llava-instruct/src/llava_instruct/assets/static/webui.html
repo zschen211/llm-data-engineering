@@ -396,6 +396,7 @@ async function loadSources(){
       <td>${esc(s.license||'-')}</td>
       <td>${s.enabled?'<span class="badge b-ok">启用</span>':'<span class="badge b-mut">停用</span>'}</td>
       <td><button class="btn-g btn-s" onclick="syncSource('${s.id}')">同步</button>
+          <button class="btn-g btn-s" onclick="reprocessSource('${s.id}')" title="raw 层已入库，仅重跑解析与持久化（零网络）">重解析</button>
           ${s.running_run_id?`<button class="btn-w btn-s" onclick="openSyncPanel('${s.running_run_id}')">● 查看进度</button>`:''}
           ${s.resumable_run_id?`<button class="btn-p btn-s" onclick="syncSource('${s.id}')">↻ 继续同步</button>`:''}
           <button class="btn-d btn-s" onclick="rmSource('${s.id}')">删除</button></td></tr>`).join('');
@@ -428,9 +429,23 @@ async function syncSource(id){
   openSyncPanel(runId);
 }
 
+async function reprocessSource(id){
+  let runId;
+  try{
+    const r=await api(`/api/sources/${id}/reprocess`,{method:'POST'});
+    runId=r.run_id;
+    toast('开始重解析：跳过下载，直接使用 raw 层文件');
+  }catch(e){
+    const m=(e.message||'').match(/run=([\w]+)/);
+    if(m){openSyncPanel(m[1]);return;}
+    toast('重解析失败: '+e.message,'err');return;
+  }
+  openSyncPanel(runId);
+}
+
 // ------------------------------------------------------------ 同步进度面板
 const STAGE_LABELS={resolve:'解析文件清单',download:'下载到暂存区',process:'数据格式解析',persist:'持久化到存储',control:'控制',done:'完成',error:'失败'};
-const TASK_LABELS={pending:'待处理',downloading:'下载中',persisted:'已持久化',skipped:'已跳过',failed:'失败'};
+const TASK_LABELS={pending:'待处理',downloading:'下载中',downloaded:'已入库 raw',persisted:'已持久化',skipped:'已跳过',failed:'失败'};
 const SYNC_TASK_PAGE=20;
 let syncPollTimer=null,syncLastEventId=0,syncRunId=null,syncStatus='',syncTasksOffset=0,syncTasksTotal=0;
 

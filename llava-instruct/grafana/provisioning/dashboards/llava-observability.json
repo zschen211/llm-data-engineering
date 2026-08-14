@@ -164,7 +164,7 @@
     {
       "id": 9,
       "type": "timeseries",
-      "title": "Ray 任务吞吐（1m rate）",
+      "title": "同步条目吞吐（1m rate，按状态）",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 6, "x": 0, "y": 14 },
       "fieldConfig": {
@@ -177,21 +177,16 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(llava_ray_tasks_succeeded_total[1m]))",
-          "legendFormat": "succeeded/s",
+          "expr": "sum by (status)(rate(llava_sync_items_total[1m]))",
+          "legendFormat": "{{status}}/s",
           "refId": "A"
-        },
-        {
-          "expr": "sum(rate(llava_ray_tasks_failed_total[1m]))",
-          "legendFormat": "failed/s",
-          "refId": "B"
         }
       ]
     },
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Ray 任务耗时 P95",
+      "title": "同步条目耗时 P95（按阶段）",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "h": 7, "w": 6, "x": 6, "y": 14 },
       "fieldConfig": {
@@ -204,8 +199,8 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(llava_ray_task_duration_seconds_bucket[5m])) by (le))",
-          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le, stage)(rate(llava_sync_item_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{stage}}",
           "refId": "A"
         }
       ]

@@ -1,0 +1,309 @@
+{
+  "title": "llava-instruct Sync Pipeline",
+  "uid": "llava-instruct-sync",
+  "tags": ["llava-instruct", "sync", "ray-data"],
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "run",
+        "type": "query",
+        "label": "Sync run",
+        "query": "label_values(llava_sync_stage_duration_seconds_count, run_id)",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "refresh": 1,
+        "includeAll": true,
+        "multi": false,
+        "allValue": ".*"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "bargauge",
+      "title": "各阶段平均耗时（窗口内所有 run）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "lcd",
+        "orientation": "horizontal",
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage)(rate(llava_sync_stage_duration_seconds_sum[5m])) / clamp_min(sum by (stage)(rate(llava_sync_stage_duration_seconds_count[5m])), 0.001)",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "各阶段平均单文件 / 单资产耗时（含 P95）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 9, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage)(rate(llava_sync_item_duration_seconds_sum[5m])) / clamp_min(sum by (stage)(rate(llava_sync_item_duration_seconds_count[5m])), 0.001)",
+          "legendFormat": "{{stage}} avg",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, stage)(rate(llava_sync_item_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{stage}} p95",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "单 run 阶段耗时明细（$run）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 9, "x": 15, "y": 0 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "expr": "sum by (run_id, stage)(llava_sync_stage_duration_seconds_sum{run_id=~\"$run\"})",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "文件 / 资产吞吐（按阶段×状态）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 7 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, status)(rate(llava_sync_items_total{run_id=~\"$run\"}[1m]))",
+          "legendFormat": "{{stage}}/{{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "累计处理资产（persist 阶段）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 4, "x": 8, "y": 7 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "expr": "sum(llava_sync_items_total{stage=\"persist\", run_id=~\"$run\"})",
+          "legendFormat": "总计（done+skipped）",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "expr": "sum(llava_sync_items_total{stage=\"persist\", status=\"done\", run_id=~\"$run\"})",
+          "legendFormat": "新增",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "expr": "sum(llava_sync_items_total{stage=\"persist\", status=\"skipped\", run_id=~\"$run\"})",
+          "legendFormat": "去重跳过",
+          "instant": true,
+          "refId": "C"
+        },
+        {
+          "expr": "sum(llava_sync_items_total{stage=\"persist\", status=\"failed\", run_id=~\"$run\"})",
+          "legendFormat": "失败",
+          "instant": true,
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "单 run 处理量累计（$run）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 7 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage)(llava_sync_items_total{run_id=~\"$run\"})",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "单 run 阶段耗时分布（$run）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 7 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "min": 0 },
+        "overrides": []
+      },
+      "options": { "displayMode": "lcd", "orientation": "horizontal", "showUnfilled": true },
+      "targets": [
+        {
+          "expr": "sum by (stage)(llava_sync_stage_duration_seconds_sum{run_id=~\"$run\"})",
+          "legendFormat": "{{stage}}",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "重试速率（app 退避 / Ray 任务重启）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 14 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage, kind)(rate(llava_sync_retries_total{run_id=~\"$run\"}[5m]))",
+          "legendFormat": "{{stage}}/{{kind}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "失败速率（按阶段）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 14 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage)(rate(llava_sync_items_total{status=\"failed\", run_id=~\"$run\"}[5m]))",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "失败率（按阶段）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 14 },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0 },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "sum by (stage)(rate(llava_sync_items_total{status=\"failed\"}[5m])) / clamp_min(sum by (stage)(rate(llava_sync_items_total[5m])), 1)",
+          "legendFormat": "{{stage}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "失败 Top runs（任务级失败累计）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 14 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "expr": "topk(5, sum by (run_id)(llava_sync_failures_total))",
+          "legendFormat": "{{run_id}}",
+          "instant": true,
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Ray Data 对象存储（spilled / current，版本相关）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 21 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "expr": "ray_data_spilled_bytes",
+          "legendFormat": "spilled",
+          "refId": "A"
+        },
+        {
+          "expr": "ray_data_current_bytes",
+          "legendFormat": "current",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

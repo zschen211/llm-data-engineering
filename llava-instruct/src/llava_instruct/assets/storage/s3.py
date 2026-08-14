@@ -59,6 +59,22 @@ class S3StorageBackend(StorageBackend):
         self.client.upload_file(str(local_path), self.bucket, key)
         return key
 
+    def put_object(self, key: str, local_path: Path) -> str:
+        if self.exists(key):
+            return key
+        self.client.upload_file(str(local_path), self.bucket, key)
+        return key
+
+    def copy_object(self, src_key: str, dst_key: str) -> str:
+        if self.exists(dst_key):
+            return dst_key
+        self.client.copy_object(
+            Bucket=self.bucket,
+            Key=dst_key,
+            CopySource={"Bucket": self.bucket, "Key": src_key},
+        )
+        return dst_key
+
     def get_file(self, object_key: str, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         self.client.download_file(self.bucket, object_key, str(target))

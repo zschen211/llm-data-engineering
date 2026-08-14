@@ -86,4 +86,31 @@ def make_router(store: AssetStore) -> APIRouter:
         threading.Thread(target=_run, daemon=True).start()
         return {"run_id": run_id, "resumed": resumed}
 
+    @router.post("/api/sources/{source_id}/reprocess", status_code=202)
+    def reprocess_source(source_id: str):
+        """Re-run Phase B only (raw layer already populated, zero network)."""
+        try:
+            run_id = store.start_sync(source_id)
+        except ValueError as exc:
+            if "already syncing" in str(exc):
+                raise HTTPException(409, str(exc)) from exc
+            raise HTTPException(400, str(exc)) from exc
+
+        def _run():
+            try:
+                store.reprocess_source(source_id, run_id=run_id)
+            except Exception as exc:
+                logger.error("background reprocess run=%s failed: %s", run_id, exc)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"run_id": run_id, "reprocess": True}
+
+    @router.get("/api/sources/{source_id}/raw")
+    def list_raw_files(source_id: str):
+        """Raw-layer files of the source (path-addressed mirror, one row per
+        repo file, with upload status / sha256 / attempts)."""
+        if store.get_source(source_id) is None:
+            raise HTTPException(404, "source not found")
+        return store.list_raw_files(source_id)
+
     return router

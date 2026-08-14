@@ -35,7 +35,7 @@ tests/
 ```mermaid
 graph TD
     conftest["conftest.py（ray_runtime）"] --> ray["ray（外部）"]
-    fakehub["fakehub.py"] --> sync["assets/services/downloaders/ray_sync.py"]
+    fakehub["fakehub.py"] --> sync["assets/services/downloaders/ray_data_sync.py"]
 
     test_assets["test_assets.py"] --> classify["assets/classify.py"]
     test_schema["test_schema.py"] --> schema["schema.py"]

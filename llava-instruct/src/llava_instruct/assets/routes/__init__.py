@@ -30,8 +30,9 @@ async def _lifespan(app: FastAPI):
     # persisted file handler from the lifespan, which runs afterwards.
     persist_uvicorn_logs()
     # Own the Ray cluster for the app's lifetime: started once here, reused
-    # by every sync (run_ray_sync only ensures it is up). If the cluster was
-    # already initialized by someone else, it is reused and not shut down.
+    # by every sync (the Ray Data pipelines only ensure it is up). If the
+    # cluster was already initialized by someone else, it is reused and not
+    # shut down.
     cluster_manager.ensure_started()
     observability.start()
     status = cluster_manager.status()

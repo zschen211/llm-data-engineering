@@ -27,6 +27,20 @@ class LocalStorageBackend(StorageBackend):
             shutil.copyfile(local_path, target)
         return key
 
+    def put_object(self, key: str, local_path: Path) -> str:
+        target = self.local_path(key)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(local_path, target)
+        return key
+
+    def copy_object(self, src_key: str, dst_key: str) -> str:
+        target = self.local_path(dst_key)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.local_path(src_key), target)
+        return dst_key
+
     def get_file(self, object_key: str, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.local_path(object_key), target)
