@@ -95,7 +95,7 @@ class StorageBackend(ABC):
 | `LocalStorageBackend` | 离线开发、无服务环境、单元测试 |
 | `S3StorageBackend`（boto3，endpoint 指向 RustFS） | 默认生产路径 |
 
-CLI 默认后端选择：环境变量 `RUSTFS_ENDPOINT` 存在且 boto3 可用 → S3；否则 Local。
+后端选择（`api.open_store`）：显式 `backend` 参数优先；否则按 `LLAVA_STORAGE_BACKEND` 开关——`rustfs`（需 `RUSTFS_ENDPOINT` + 凭据，缺失直接报错）、`local`（本地内容寻址目录）、`auto`（默认：`RUSTFS_ENDPOINT` 存在 → S3；否则回退本地并打印醒目 warning，防止"声称 RustFS 实际落盘"的静默降级）。`scripts/serve.sh` 默认即导出 compose 同款 RustFS 配置并加载根目录 `.env`，`--storage local` 显式切本地。
 
 ## 4. 数据库 Schema（SQLite）
 

@@ -56,34 +56,59 @@ logger = get_logger("assets.api")
 DEFAULT_DATA_DIR = Path(os.environ.get("LLAVA_DATA_DIR", "data"))
 
 
+def _resolve_backend(data_dir: Path) -> StorageBackend:
+    """Resolve the storage backend from the environment.
+
+    ``LLAVA_STORAGE_BACKEND``: ``rustfs`` (requires endpoint + credentials,
+    missing config raises instead of silently falling back), ``local``
+    (forces the local content-addressed directory), ``auto`` (default:
+    ``RUSTFS_ENDPOINT`` → RustFS/S3, else local with a loud warning so a
+    misconfigured deployment never silently stores blobs on disk).
+    """
+    switch = os.environ.get("LLAVA_STORAGE_BACKEND", "auto").lower()
+    endpoint = os.environ.get("RUSTFS_ENDPOINT")
+    if switch not in ("auto", "local", "rustfs"):
+        raise ValueError(
+            f"unknown LLAVA_STORAGE_BACKEND {switch!r} (auto|local|rustfs)"
+        )
+    if switch == "rustfs" and not endpoint:
+        raise ValueError("LLAVA_STORAGE_BACKEND=rustfs requires RUSTFS_ENDPOINT")
+    use_rustfs = (bool(endpoint) and switch != "local") or switch == "rustfs"
+    if not use_rustfs:
+        logger.warning(
+            "no RUSTFS_ENDPOINT configured — falling back to LOCAL storage "
+            "backend at %s (blobs will NOT go to RustFS); set "
+            "LLAVA_STORAGE_BACKEND=rustfs to require RustFS",
+            data_dir / "blobs",
+        )
+        return LocalStorageBackend(data_dir / "blobs")
+    if not (
+        os.environ.get("RUSTFS_ACCESS_KEY") and os.environ.get("RUSTFS_SECRET_KEY")
+    ):
+        raise ValueError(
+            "RUSTFS_ENDPOINT is set but RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY are missing"
+        )
+    logger.info("storage backend: rustfs (%s)", endpoint)
+    return S3StorageBackend(
+        endpoint,
+        os.environ["RUSTFS_ACCESS_KEY"],
+        os.environ["RUSTFS_SECRET_KEY"],
+        os.environ.get("RUSTFS_BUCKET", "llava-assets"),
+    )
+
+
 def open_store(
     data_dir: Path | None = None, backend: StorageBackend | None = None
 ) -> AssetStore:
     """Build an AssetStore from configuration (env or explicit backend).
 
-    Backend resolution: an explicit ``backend`` wins; otherwise
-    ``RUSTFS_ENDPOINT`` (+ access/secret/bucket) selects the RustFS/S3 backend,
-    and the local content-addressed directory is the fallback.
+    Backend resolution: an explicit ``backend`` wins; otherwise the
+    ``LLAVA_STORAGE_BACKEND`` switch selects the target (see
+    ``_resolve_backend``).
     """
     data_dir = Path(data_dir or DEFAULT_DATA_DIR)
     if backend is None:
-        endpoint = os.environ.get("RUSTFS_ENDPOINT")
-        if endpoint:
-            if not (
-                os.environ.get("RUSTFS_ACCESS_KEY")
-                and os.environ.get("RUSTFS_SECRET_KEY")
-            ):
-                raise ValueError(
-                    "RUSTFS_ENDPOINT is set but RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY are missing"
-                )
-            backend = S3StorageBackend(
-                endpoint,
-                os.environ["RUSTFS_ACCESS_KEY"],
-                os.environ["RUSTFS_SECRET_KEY"],
-                os.environ.get("RUSTFS_BUCKET", "llava-assets"),
-            )
-        else:
-            backend = LocalStorageBackend(data_dir / "blobs")
+        backend = _resolve_backend(data_dir)
     return AssetStore(data_dir / "assets.db", backend, tmp_dir=data_dir / "tmp")
 
 

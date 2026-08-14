@@ -30,6 +30,29 @@ def test_open_store_requires_credentials_with_rustfs_env(tmp_path, monkeypatch):
         open_store(data_dir=tmp_path / "data")
 
 
+def test_open_store_rustfs_switch_requires_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLAVA_STORAGE_BACKEND", "rustfs")
+    monkeypatch.delenv("RUSTFS_ENDPOINT", raising=False)
+    with pytest.raises(ValueError, match="RUSTFS_ENDPOINT"):
+        open_store(data_dir=tmp_path / "data")
+
+
+def test_open_store_unknown_switch_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("LLAVA_STORAGE_BACKEND", "nope")
+    with pytest.raises(ValueError, match="LLAVA_STORAGE_BACKEND"):
+        open_store(data_dir=tmp_path / "data")
+
+
+def test_open_store_local_switch_forces_local(tmp_path, monkeypatch):
+    """LLAVA_STORAGE_BACKEND=local ignores a RUSTFS_ENDPOINT (no silent
+    drift to the object store)."""
+    monkeypatch.setenv("LLAVA_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("RUSTFS_ENDPOINT", "http://localhost:9000")
+    store = open_store(data_dir=tmp_path / "data")
+    assert store.backend_name == "local"
+    store.close()
+
+
 def test_open_store_with_explicit_backend(tmp_path):
     backend = LocalStorageBackend(tmp_path / "blobs")
     store = open_store(data_dir=tmp_path / "data", backend=backend)

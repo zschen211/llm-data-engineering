@@ -11,19 +11,17 @@ uv sync --extra dev               # 基础 + 测试（所有运行时依赖均�
 uv run pytest
 
 # 启动 Web 管理界面（资产源 CRUD / 同步 / 标签 / 版本 / 快照 / 预览）
-scripts/serve.sh [--port 8000] [--data-dir data]
+scripts/serve.sh [--port 8000] [--data-dir data] [--storage rustfs|local]
 ```
 
 ## 数据资产层
 
 资产层围绕两个关键元信息设计：**数据源**（资源的元信息 + 互联网下载源）与**存储位置**（下载后的存储后端与对象键）。详细设计见 [docs/spec/asset_layer_spec.md](docs/spec/asset_layer_spec.md)，文档索引见 [docs/](docs/README.md)。
 
-### 启动 RustFS（可选，默认本地存储）
+### 启动 RustFS（默认存储后端）
 
 ```bash
 docker compose up -d          # S3 API:9000 / console:9001（rustfsadmin/rustfsadmin）
-export RUSTFS_ENDPOINT=http://localhost:9000
-export RUSTFS_ACCESS_KEY=rustfsadmin RUSTFS_SECRET_KEY=rustfsadmin
 uv run python scripts/rustfs_smoke.py    # 真实后端集成冒烟测试
 ```
 
@@ -31,7 +29,15 @@ uv run python scripts/rustfs_smoke.py    # 真实后端集成冒烟测试
 > `RUSTFS_IMAGE=rustfs/rustfs:latest docker compose up -d`。单机开发默认
 > `RUSTFS_UNSAFE_BYPASS_DISK_CHECK=true`（共享磁盘绕过检查）。
 
-不设置 `RUSTFS_ENDPOINT` 时自动使用本地磁盘后端（`data/blobs/`）。
+**`scripts/serve.sh` 默认即连 RustFS**（`http://localhost:9000` + compose 默认凭据），会自动加载项目根目录 `.env`（模板见 [.env.example](.env.example)）。已导出的环境变量优先级最高。
+
+```bash
+scripts/serve.sh                      # 默认 rustfs（与 compose 默认凭据一致）
+scripts/serve.sh --storage local      # 显式本地磁盘后端（data/blobs/，离线开发）
+```
+
+- `LLAVA_STORAGE_BACKEND=rustfs|local|auto` 显式声明后端：`rustfs` 缺失 `RUSTFS_ENDPOINT`/凭据时**直接报错**（不再静默降级）；`auto`（默认）在未配置 RustFS 时回退本地并打印醒目 warning。
+- 若此前用本地后端积累过数据，用 `uv run python scripts/migrate_to_rustfs.py` 把 `data/blobs/` 的对象按原 key 批量搬进 bucket（可重入，存在即跳过），随后直接以 rustfs 后端启动即可。
 
 ## 可观测性
 

@@ -16,8 +16,9 @@ uv run pytest                                # 跑测试
 
 | 场景 | 设置 | 效果 |
 | --- | --- | --- |
-| 本地开发（默认） | 不设置任何环境变量 | 本地内容寻址目录 `data/blobs/` + `data/assets.db` |
-| RustFS 对象存储 | `RUSTFS_ENDPOINT` + `RUSTFS_ACCESS_KEY` + `RUSTFS_SECRET_KEY`（可选 `RUSTFS_BUCKET`，默认 `llava-assets`） | 图片 blob 存 RustFS，元数据仍存本地 SQLite |
+| RustFS 对象存储（默认） | `LLAVA_STORAGE_BACKEND=rustfs` + `RUSTFS_ENDPOINT` + `RUSTFS_ACCESS_KEY` + `RUSTFS_SECRET_KEY`（可选 `RUSTFS_BUCKET`，默认 `llava-assets`） | 图片 blob 存 RustFS，元数据仍存本地 SQLite；配置缺失直接报错 |
+| 本地开发 | `LLAVA_STORAGE_BACKEND=local`（或 `scripts/serve.sh --storage local`） | 本地内容寻址目录 `data/blobs/` + `data/assets.db` |
+| 自动（兼容旧行为） | 不设置 `LLAVA_STORAGE_BACKEND` | `RUSTFS_ENDPOINT` 存在 → RustFS；否则回退本地并打印 warning |
 | 数据目录 | `LLAVA_DATA_DIR`（默认 `data/`） | 指定 SQLite 与临时区位置 |
 
 ```bash
@@ -25,6 +26,13 @@ uv run pytest                                # 跑测试
 docker compose up -d
 # 用 DaoCloud 国内镜像，本地单盘需绕过磁盘检查（compose 已默认开启）
 # S3 API: http://localhost:9000，console: http://localhost:9001（rustfsadmin/rustfsadmin）
+
+# scripts/serve.sh 默认即连 RustFS（自动加载根目录 .env，模板 .env.example）
+scripts/serve.sh                       # rustfs（compose 默认凭据）
+scripts/serve.sh --storage local       # 显式本地后端
+
+# 此前用本地后端积累过数据？把 data/blobs/ 按原 key 搬进 bucket（可重入）：
+uv run python scripts/migrate_to_rustfs.py
 ```
 
 ## 2. 数据工厂流水线（5 个核心命令）
