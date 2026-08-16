@@ -1,0 +1,3 @@
+# runtime artifacts (SQLite + local storage + models)
+/data/
+.ruff_cache/

@@ -11,7 +11,7 @@ built/run on its own. There is no shared workspace — do NOT run `uv sync` from
 the repo root and expect sub-project code to be importable; always `cd` into
 the sub-project folder.
 
-The three sub-projects mirror projects 3/5/14 of 《大模型数据工程》
+The sub-projects mirror projects 3/5/14 of 《大模型数据工程》
 (datascale-ai.github.io/data_engineering_book/part14/):
 
 - **`llava-instruct/`** — LLaVA multimodal asset factory: unified asset
@@ -19,6 +19,11 @@ The three sub-projects mirror projects 3/5/14 of 《大模型数据工程》
   FastAPI management UI. `sync_source` runs on Ray (one task per file,
   sliding-window concurrency, crash auto-retry). Programmatic entry:
   `llava_instruct.assets.api`.
+- **`data-factory/`** — data production & eval closed loop on top of the
+  llava-instruct asset layer (strategies/workflows/lineage/model registry/
+  eval/reports, spec in `data-factory/docs/spec/`). Consumes assets only via
+  `llava_instruct.assets.api` (path dependency); own SQLite + storage,
+  Ray Data executor; `dfac` CLI; programmatic entry `data_factory.api`.
 - **`mm-rag/`** — multimodal RAG assistant for financial report PDFs.
 - **`video-generation/`** — T2V video data pipeline with six resumable,
   shardable stages.
