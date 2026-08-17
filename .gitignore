@@ -8,7 +8,7 @@ dist/
 .coverage
 .pytest_cache/
 /data/
-/ray-tutorial/
-/asset-management/assets.jsonl
-/asset-management/pool/
-/asset-management/data/
+/ray_tutorial/
+/asset/assets.jsonl
+/asset/pool/
+/asset/data/

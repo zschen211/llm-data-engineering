@@ -1,7 +1,7 @@
 {
-  "title": "asset-management Sync Pipeline",
-  "uid": "asset-management-sync",
-  "tags": ["asset-management", "sync", "ray-data"],
+  "title": "asset Sync Pipeline",
+  "uid": "asset-sync",
+  "tags": ["asset", "sync", "ray-data"],
   "timezone": "browser",
   "editable": true,
   "refresh": "10s",

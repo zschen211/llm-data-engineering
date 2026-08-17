@@ -1,4 +1,4 @@
-# RustFS (S3-compatible object storage) for the asset-management asset layer.
+# RustFS (S3-compatible object storage) for the asset asset layer.
 # Usage: docker compose up -d
 #   S3 API  : http://localhost:9000  (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY)
 #   Console : http://localhost:9001  (rustfsadmin / rustfsadmin)

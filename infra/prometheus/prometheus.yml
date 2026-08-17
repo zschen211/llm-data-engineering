@@ -3,9 +3,9 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
-  # asset-management self-instrumentation: process gauges (psutil), HTTP
+  # asset self-instrumentation: process gauges (psutil), HTTP
   # counters, Ray cluster/raylet/worker gauges and task counters.
-  - job_name: asset-management
+  - job_name: asset
     metrics_path: /metrics
     static_configs:
       - targets: ["localhost:8000"]

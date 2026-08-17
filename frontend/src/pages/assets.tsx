@@ -1,4 +1,4 @@
-// asset-management pages: the platform service (sources/assets/snapshots/
+// asset pages: the platform service (sources/assets/snapshots/
 // sync runs/downloads/cluster/info) — all under /api/* of :8000.
 
 import { useState, type ReactNode } from "react";

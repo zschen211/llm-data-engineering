@@ -8,7 +8,7 @@
 
 ```
 frontend/          纯静态 SPA，只经 HTTP 调后端，不 import 任何 Python 包
-asset-management   平台服务：数字资产层 + 管理 API（原 asset-management）
+asset   平台服务：数字资产层 + 管理 API（原 llava-instruct）
 data-factory       业务服务：数据生产与评测闭环（FastAPI + CLI）
 mm-rag / video-generation   业务服务（二期接入）
 infra/             中间件 + 运维（docker compose / 脚本 / 配置），声明式
@@ -26,7 +26,7 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | 6379 | Ray GCS | 集群连接地址（`ray://` 或 `ip:6379`） |
 | 8265 | Ray Dashboard | 集群状态/任务/日志 |
 | 8080 | Ray metrics agent | Prometheus 抓取（`ASSET_RAY_METRICS_PORT` 固定） |
-| 8000 | asset-management HTTP | FastAPI 管理 API |
+| 8000 | asset HTTP | FastAPI 管理 API |
 | 8001 | data-factory HTTP | FastAPI 管理 API |
 
 ## 环境变量契约
@@ -42,7 +42,7 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | `RAY_ADDRESS` | 空（→ 服务内嵌集群兜底） | 独立 Ray 集群地址，`ray start` 产出 |
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | compose 注入 |
 
-### asset-management（前缀 `ASSET_`）
+### asset（前缀 `ASSET_`）
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
@@ -73,13 +73,13 @@ RustFS bucket 默认：**`dfac-datasets`**。Ray：共享 `RAY_ADDRESS`（无独
 - 所有服务自带 Prometheus 埋点，指标一律带 **`asset_`** 前缀（进程/HTTP/Ray/
   sync 系列），避免与 Ray metrics agent 的 `ray_*` 冲突。
 - Prometheus scrape 目标（`infra/prometheus/prometheus.yml`）：
-  `asset-management:8000`、`data-factory:8001`、`ray-metrics:8080`、
+  `asset:8000`、`data-factory:8001`、`ray-metrics:8080`、
   `node-exporter:9100`。
 - 本地 dev：Ray 集群跑在宿主机 netns，Prometheus 容器必须 host network。
 
 ## API 路径契约
 
-- asset-management 服务自身挂载 `/api/*`：`/api/info` `/api/sources`
+- asset 服务自身挂载 `/api/*`：`/api/info` `/api/sources`
   `/api/assets` `/api/snapshots` `/api/sync` `/api/downloads` `/api/cluster`
   `/api/backup`，另有 `/metrics`。
 - data-factory 服务自身挂载 `/api/*`：`/api/capabilities` `/api/strategies`
@@ -88,7 +88,7 @@ RustFS bucket 默认：**`dfac-datasets`**。Ray：共享 `RAY_ADDRESS`（无独
   另有 `/metrics`。
 - 前端单源访问：dev 用 vite proxy 按路径前缀分流；生产由 infra nginx 网关
   分流（`/api/{sources,assets,snapshots,sync,downloads,cluster,info,backup}`
-  → asset-management:8000，其余 `/api/*` → data-factory:8001）。
+  → asset:8000，其余 `/api/*` → data-factory:8001）。
 
 ## Ray 集群
 

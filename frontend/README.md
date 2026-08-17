@@ -3,7 +3,7 @@
 仓库四层结构的第一层（唯一面向人的客户端）：**只做页面展示，只经 HTTP 调用
 后端 API，永不 import 任何 Python 包**。当前消费两个服务：
 
-- `asset-management`（:8000，`/api/*` 资产域）
+- `asset`（:8000，`/api/*` 资产域）
 - `data-factory`（:8001，`/api/*` 工厂域）
 
 ## 技术栈
@@ -23,11 +23,11 @@ vite 按路径前缀代理到两个后端（见 `vite.config.ts`）：
 
 | 前缀 | 目标 |
 | --- | --- |
-| `/api/{assets,sources,snapshots,sync,downloads,cluster,info,backup}` | `http://localhost:8000`（asset-management） |
+| `/api/{assets,sources,snapshots,sync,downloads,cluster,info,backup}` | `http://localhost:8000`（asset） |
 | 其余 `/api/*` | `http://localhost:8001`（data-factory） |
 
-两个后端需先启动：`asset-management/scripts/serve.sh --port 8000` 与
-`data-factory/scripts/serve.sh --port 8001`（存储可 `--storage local` 离线跑；
+两个后端需先启动：`asset/scripts/serve.sh --port 8000` 与
+`data_factory/scripts/serve.sh --port 8001`（存储可 `--storage local` 离线跑；
 Ray 共享集群经 `RAY_ADDRESS`，未配置时服务内嵌兜底）。
 
 ## 生产构建

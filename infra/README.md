@@ -11,7 +11,7 @@ import 本目录**；双方通过 [docs/contract.md](docs/contract.md) 中的契
 infra/
 ├── docs/contract.md          # 契约：端口 / env / 指标 / API 路径 / 数据目录
 ├── docker-compose.yml        # RustFS + Prometheus + Grafana + node-exporter
-├── prometheus/prometheus.yml # 抓取 asset-management:8000 / data-factory:8001
+├── prometheus/prometheus.yml # 抓取 asset:8000 / data-factory:8001
 │                             #   / ray-metrics:8080 / node-exporter:9100
 ├── grafana/provisioning/     # dashboards（asset_ 指标前缀）+ datasource
 ├── scripts/                  # 生命周期脚本（见下）
@@ -28,7 +28,7 @@ cp .env.example .env          # 按需修改（RustFS 凭据 / Grafana 密码）
 export RAY_ADDRESS=127.0.0.1:6379
 
 # 然后在各自目录启动业务服务：
-#   asset-management: scripts/serve.sh --port 8000
+#   asset: scripts/serve.sh --port 8000
 #   data-factory:     scripts/serve.sh --port 8001
 
 ./scripts/status.sh           # compose + ray 状态
@@ -46,7 +46,7 @@ export RAY_ADDRESS=127.0.0.1:6379
 | 3000 | Grafana（admin / $GRAFANA_ADMIN_PASSWORD） |
 | 9100 | node-exporter |
 | 6379/8265/8080 | Ray GCS / Dashboard / metrics agent |
-| 8000/8001 | asset-management / data-factory HTTP |
+| 8000/8001 | asset / data-factory HTTP |
 
 ## 约定
 

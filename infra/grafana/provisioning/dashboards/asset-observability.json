@@ -1,7 +1,7 @@
 {
-  "title": "asset-management Observability",
-  "uid": "asset-management-obs",
-  "tags": ["asset-management", "observability"],
+  "title": "asset Observability",
+  "uid": "asset-obs",
+  "tags": ["asset", "observability"],
   "timezone": "browser",
   "editable": true,
   "refresh": "10s",

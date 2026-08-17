@@ -1,5 +1,5 @@
 // The signature element: the four-layer stack as a live status strip.
-// INFRA (ray cluster + object store) / ASSET (asset-management) /
+// INFRA (ray cluster + object store) / ASSET (asset) /
 // FACTORY (data-factory) / UI (this console). Clicking a layer jumps to its
 // first page.
 

@@ -8,10 +8,10 @@ The repo is a container of **independent sub-projects** in a four-layer stack:
 
 ```
 frontend/           pure static SPA (vite+react+ts); talks to backends over HTTP only
-asset-management/   platform service: digital asset layer + management API
-data-factory/       business service: data production & eval closed loop
-mm-rag/             business service: multimodal RAG assistant (phase-2 shared-stack integration)
-video-generation/   business service: T2V video data pipeline (phase-2)
+asset/              platform service: digital asset layer + management API
+data_factory/       business service: data production & eval closed loop
+  mm_rag/           business service: multimodal RAG assistant (phase-2 shared-stack)
+  video_generation/ business service: T2V video data pipeline (phase-2)
 infra/              middleware & ops: RustFS/Ray/Prometheus/Grafana/nginx + lifecycle scripts
 ```
 
@@ -23,19 +23,20 @@ bash scripts, no Python code, never imported). The sub-projects mirror projects
 3/5/14 of 《大模型数据工程》
 (datascale-ai.github.io/data_engineering_book/part14/).
 
-- **`asset-management/`** — platform service, generic digital asset layer:
+- **`asset/`** — platform service, generic digital asset layer:
   sources / HF download pipeline (Ray Data, sliding-window concurrency, crash
   auto-retry) / content-addressed storage (local or RustFS) / tags / versions /
   snapshots / management API. Programmatic entry: `asset_management.assets.api`
   (the only stable entry point). Management UI lives in `frontend/`.
-- **`data-factory/`** — data production & eval closed loop on top of the asset
+- **`data_factory/`** — data production & eval closed loop on top of the asset
   layer: capability domains / strategies / workflows / lineage / model registry /
   eval / reports + a FastAPI management API (`data_factory.routes`). Consumes
   assets only via `asset_management.assets.api` (path dependency); own SQLite +
   storage; `dfac` CLI; programmatic entry `data_factory.api`.
-- **`mm-rag/`** — multimodal RAG assistant for financial report PDFs.
-- **`video-generation/`** — T2V video data pipeline with six resumable,
-  shardable stages.
+- **`data_factory/mm_rag/`** — multimodal RAG assistant for financial report
+  PDFs.
+- **`data_factory/video_generation/`** — T2V video data pipeline with six
+  resumable, shardable stages.
 - **`infra/`** — middleware & ops: docker compose (RustFS/Prometheus/Grafana/
   node-exporter), Ray standalone cluster scripts, backup/clean/status scripts,
   nginx gateway config. The **contract** (ports/env vars/metric names/API paths/

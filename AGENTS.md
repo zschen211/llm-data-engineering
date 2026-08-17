@@ -8,18 +8,19 @@ The repo is a **four-layer stack**:
 
 ```
 frontend/           pure static SPA (vite+react+ts); UI only, talks to backends over HTTP
-asset-management/   platform service: digital asset layer + management API
-data-factory/       business service: data production & eval closed loop
-mm-rag/             business service: multimodal RAG assistant (phase-2 shared-stack)
-video-generation/   business service: T2V video data pipeline (phase-2)
+asset/              platform service: digital asset layer + management API
+data_factory/       business service: data production & eval closed loop
+  mm_rag/           business service: multimodal RAG assistant (phase-2 shared-stack)
+  video_generation/ business service: T2V video data pipeline (phase-2)
 infra/              middleware & ops: RustFS/Ray/Prometheus/Grafana/nginx + scripts (declarative)
 ```
 
-- Every Python sub-project lives in its own top-level folder and is a
-  completely separate package (own `pyproject.toml`, own dependencies, own
-  tests, own `uv.lock`), built/run on its own. There is no shared workspace —
-  do NOT run `uv sync` from the repo root; always `cd` into the sub-project
-  folder.
+- Every Python sub-project lives in its own folder and is a completely
+  separate package (own `pyproject.toml`, own dependencies, own tests, own
+  `uv.lock`), built/run on its own. There is no shared workspace — do NOT run
+  `uv sync` from the repo root; always `cd` into the sub-project folder
+  (`asset/`, `data_factory/`, `data_factory/mm_rag/`,
+  `data_factory/video_generation/`).
 - `infra/` has **no Python code and is never imported**; services connect to
   middleware only through the contract in `infra/docs/contract.md` (ports /
   env vars / metric names / API paths / data dirs).
@@ -30,20 +31,21 @@ infra/              middleware & ops: RustFS/Ray/Prometheus/Grafana/nginx + scri
 The sub-projects mirror projects 3/5/14 of 《大模型数据工程》
 (datascale-ai.github.io/data_engineering_book/part14/):
 
-- **`asset-management/`** — platform service, generic digital asset layer:
-  sources / HF download pipeline / content-addressed storage (local or
-  RustFS) / tags / versions / snapshots, plus a FastAPI management API.
-  `sync_source` runs on Ray (one task per file, sliding-window concurrency,
-  crash auto-retry). Programmatic entry: `asset_management.assets.api`.
-- **`data-factory/`** — data production & eval closed loop on top of the
-  asset-management asset layer (strategies/workflows/lineage/model registry/
-  eval/reports, spec in `data-factory/docs/spec/`). Consumes assets only via
+- **`asset/`** — platform service, generic digital asset layer (package:
+  `asset_management`): sources / HF download pipeline / content-addressed
+  storage (local or RustFS) / tags / versions / snapshots, plus a FastAPI
+  management API. `sync_source` runs on Ray (one task per file, sliding-window
+  concurrency, crash auto-retry). Programmatic entry:
+  `asset_management.assets.api`.
+- **`data_factory/`** — data production & eval closed loop on top of the
+  asset layer (strategies/workflows/lineage/model registry/eval/reports, spec
+  in `data_factory/docs/spec/`). Consumes assets only via
   `asset_management.assets.api` (path dependency); own SQLite + storage,
   Ray Data executor; FastAPI management API (`data_factory.routes`); `dfac`
   CLI; programmatic entry `data_factory.api`.
-- **`mm-rag/`** — multimodal RAG assistant for financial report PDFs.
-- **`video-generation/`** — T2V video data pipeline with six resumable,
-  shardable stages.
+- **`data_factory/mm_rag/`** — multimodal RAG assistant for financial PDFs.
+- **`data_factory/video_generation/`** — T2V video data pipeline with six
+  resumable, shardable stages.
 
 ## Commands
 
@@ -54,8 +56,8 @@ uv run pytest
 uv build
 
 # Serve the backends
-asset-management/scripts/serve.sh --port 8000   # asset-management API
-data-factory/scripts/serve.sh --port 8001       # data-factory API
+asset/scripts/serve.sh --port 8000         # asset API
+data_factory/scripts/serve.sh --port 8001  # data-factory API
 
 # frontend (from frontend/)
 npm install && npm run dev       # http://localhost:5173
@@ -99,6 +101,7 @@ uv run bandit -r src -q
 - Each sub-project: `pyproject.toml` (hatchling, src/ layout,
   `[project.scripts]` entry), `src/<package>/`, `tests/`, README with an
   end-to-end runnable example.
+- Directory names are snake_case and match the repo layout above.
 - Never put comments in code unless they carry design intent (the sub-projects
   use docstrings for that).
 - `pytest` runs from each sub-project's own folder; there is no root-level
