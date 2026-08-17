@@ -1,4 +1,4 @@
-"""Data production & eval closed loop over the llava-instruct asset layer.
+"""Data production & eval closed loop over the asset-management asset layer.
 
 The package disables Ray's uv-run runtime-env hook at import time
 (``RAY_ENABLE_UV_RUN_RUNTIME_ENV=0``), before any submodule imports ``ray``:

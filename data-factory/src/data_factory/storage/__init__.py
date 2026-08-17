@@ -63,5 +63,5 @@ def resolve_backend(
         endpoint,
         os.environ["RUSTFS_ACCESS_KEY"],
         os.environ["RUSTFS_SECRET_KEY"],
-        os.environ.get("RUSTFS_BUCKET", "llava-datasets"),
+        os.environ.get("RUSTFS_BUCKET", "dfac-datasets"),
     )

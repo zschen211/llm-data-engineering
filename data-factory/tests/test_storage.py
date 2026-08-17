@@ -77,8 +77,8 @@ def test_key_helpers():
 
 def test_s3_backend_with_moto():
     with moto.mock_aws():
-        backend = S3StorageBackend(None, "ak", "sk", bucket="llava-datasets")
-        assert backend.bucket == "llava-datasets"
+        backend = S3StorageBackend(None, "ak", "sk", bucket="dfac-datasets")
+        assert backend.bucket == "dfac-datasets"
         src = _write_tmp("x.txt", b"payload")
         key = backend.put_file(src, jsonl.sha256_of(src), ".txt")
         assert backend.exists(key)

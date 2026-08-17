@@ -27,12 +27,12 @@ def test_open_factory_requires_valid_env(tmp_path, monkeypatch):
 
 
 def test_snapshot_dataset_consumes_asset_layer(tmp_path, monkeypatch):
-    """Snapshot datasets read the llava-instruct asset layer via its API."""
+    """Snapshot datasets read the asset-management asset layer via its API."""
     asset_dir = tmp_path / "assets"
-    monkeypatch.setenv("LLAVA_DATA_DIR", str(asset_dir))
-    monkeypatch.setenv("LLAVA_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ASSET_DATA_DIR", str(asset_dir))
+    monkeypatch.setenv("ASSET_STORAGE_BACKEND", "local")
 
-    from llava_instruct.assets.api import open_store as open_asset_store
+    from asset_management.assets.api import open_store as open_asset_store
 
     with open_asset_store(data_dir=asset_dir) as store:
         store.import_dir(

@@ -4,38 +4,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-The repo is a container of **independent sub-projects**. Each sub-project lives in its own top-level folder, is a completely separate Python package (own `pyproject.toml`, own dependencies, own tests, own `uv.lock`) and can be built/run on its own. There is no shared workspace — do NOT run `uv sync` from the repo root and expect sub-project code to be importable; always `cd` into the sub-project folder.
+The repo is a container of **independent sub-projects** in a four-layer stack:
 
-The three sub-projects mirror projects 3/5/14 of 《大模型数据工程》 (datascale-ai.github.io/data_engineering_book/part14/):
+```
+frontend/           pure static SPA (vite+react+ts); talks to backends over HTTP only
+asset-management/   platform service: digital asset layer + management API
+data-factory/       business service: data production & eval closed loop
+mm-rag/             business service: multimodal RAG assistant (phase-2 shared-stack integration)
+video-generation/   business service: T2V video data pipeline (phase-2)
+infra/              middleware & ops: RustFS/Ray/Prometheus/Grafana/nginx + lifecycle scripts
+```
 
-- **`llava-instruct/`** — LLaVA multimodal instruction data factory. Pipeline: asset pool (general/document/chart images) -> template-driven supervision construction (caption, counting, OCR summary, doc QA, chart reading/comparison, region grounding, multi-image comparison) -> QA (structure/semantic/bbox checks) -> bbox reverse rendering -> train/val/smoke split + manifest. Deps: Pillow only; sample schema in `src/llava_instruct/schema.py`.
-- **`mm-rag/`** — multimodal RAG assistant for financial report PDFs. Pipeline: page rendering (PyMuPDF) -> visual index (Byaldi, optional `gpu` extra) or lexical fallback -> Top-K retrieval with table-of-contents page suppression -> evidence-organized answers (fallback or VLM) -> hit@k/evidence/directory-suppression evaluation. Deps: pymupdf; `gpu` extra adds torch/transformers/byaldi.
-- **`video-generation/`** — T2V video data pipeline with six resumable, shardable stages: source loading (ffprobe) -> PySceneDetect shot segmentation -> Farneback optical-flow motion filter -> CLIP + LAION-Aesthetic scoring -> multi-frame VLM captioning -> shot-language tagging (controlled vocab + camera-motion classification) -> final manifest joined on `shot_id`. Deps: numpy/scenedetect/opencv-python-headless; `gpu` extra adds torch/transformers.
+Each Python sub-project is a completely separate package (own `pyproject.toml`,
+own dependencies, own tests, own `uv.lock`) and can be built/run on its own.
+There is no shared workspace — do NOT run `uv sync` from the repo root; always
+`cd` into the sub-project folder. `infra/` is declarative (compose + configs +
+bash scripts, no Python code, never imported). The sub-projects mirror projects
+3/5/14 of 《大模型数据工程》
+(datascale-ai.github.io/data_engineering_book/part14/).
 
-## Commands (run from inside a sub-project folder)
+- **`asset-management/`** — platform service, generic digital asset layer:
+  sources / HF download pipeline (Ray Data, sliding-window concurrency, crash
+  auto-retry) / content-addressed storage (local or RustFS) / tags / versions /
+  snapshots / management API. Programmatic entry: `asset_management.assets.api`
+  (the only stable entry point). Management UI lives in `frontend/`.
+- **`data-factory/`** — data production & eval closed loop on top of the asset
+  layer: capability domains / strategies / workflows / lineage / model registry /
+  eval / reports + a FastAPI management API (`data_factory.routes`). Consumes
+  assets only via `asset_management.assets.api` (path dependency); own SQLite +
+  storage; `dfac` CLI; programmatic entry `data_factory.api`.
+- **`mm-rag/`** — multimodal RAG assistant for financial report PDFs.
+- **`video-generation/`** — T2V video data pipeline with six resumable,
+  shardable stages.
+- **`infra/`** — middleware & ops: docker compose (RustFS/Prometheus/Grafana/
+  node-exporter), Ray standalone cluster scripts, backup/clean/status scripts,
+  nginx gateway config. The **contract** (ports/env vars/metric names/API paths/
+  data dirs) lives in `infra/docs/contract.md` — services connect to middleware
+  only through it, never by importing infra.
+
+## Commands
 
 ```bash
-# Install all dependencies (including dev)
+# Python sub-projects (run from inside the sub-project folder)
 uv sync --extra dev
-
-# Run all tests
 uv run pytest
-
-# Run the sub-project CLI
-uv run llava-instruct --help   # llava-instruct prepare-assets|generate|qa|render|split
-uv run mm-rag --help           # mm-rag render-pdf|build-index|ask|evaluate
-uv run video-generation --help # video-generation load-sources|scene-detect|motion-filter|aesthetic-filter|caption|tag-shot-language|build-manifest
-
-# Build a standalone package
 uv build
+uv run ruff check src tests        # or scripts/run_lint.sh: ruff+radon+pylint+bandit
 
-# Optional GPU capabilities (visual indexing, VLM captioning, aesthetic scoring)
-uv sync --extra gpu
+# frontend (run from frontend/)
+npm install
+npm run dev                        # http://localhost:5173 (proxies /api to both backends)
+npm run lint && npm run typecheck
+
+# infra (run from infra/)
+./scripts/up.sh                    # RustFS + Prometheus + Grafana + node-exporter
+./scripts/ray-start.sh             # standalone Ray cluster (export RAY_ADDRESS)
+./scripts/obs_check.sh             # observability smoke
+./scripts/backup.sh                # consistent SQLite snapshots
 ```
 
 ## Conventions
 
-- Follow the established structure when adding a new sub-project: `pyproject.toml` (hatchling, src/ layout, `[project.scripts]` entry), `src/<package>/`, `tests/`, README with an end-to-end runnable example.
-- Keep heavy ML dependencies (torch, transformers, byaldi, clip) in `[project.optional-dependencies] gpu` so the CPU path stays light; guard imports at call time and raise a clear `RuntimeError` mentioning the `gpu` extra.
-- Never put comments in code unless they carry design intent (all three sub-projects use docstrings for that).
-- `pytest` runs from each sub-project's own folder; there is no root-level test config.
+- Follow the established structure when adding a new sub-project: `pyproject.toml`
+  (hatchling, src/ layout, `[project.scripts]` entry), `src/<package>/`, `tests/`,
+  README with an end-to-end runnable example.
+- Keep heavy ML dependencies (torch, transformers, byaldi, clip) in
+  `[project.optional-dependencies] gpu` so the CPU path stays light; guard
+  imports at call time and raise a clear `RuntimeError` mentioning the `gpu`
+  extra.
+- Never put comments in code unless they carry design intent (sub-projects use
+  docstrings for that).
+- `pytest` runs from each sub-project's own folder; there is no root-level test
+  config.
+- Ray: attach the shared cluster via `RAY_ADDRESS` (infra contract); when unset
+  an embedded local cluster is the dev fallback (loud warning). Tests always use
+  a session-scoped embedded cluster, never the shared one.

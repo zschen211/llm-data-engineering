@@ -12,6 +12,7 @@ dropped by the publish sink.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import ray
@@ -37,8 +38,20 @@ OUT_FILENAME = "out.jsonl"
 
 
 def ensure_ray() -> None:
-    if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True, log_to_driver=False)
+    """Attach to the shared Ray cluster (infra contract: ``RAY_ADDRESS``);
+    fall back to an embedded local cluster for dev when it is unset."""
+    if ray.is_initialized():
+        return
+    address = os.environ.get("RAY_ADDRESS", "").strip()
+    if address:
+        ray.init(address=address, ignore_reinit_error=True, log_to_driver=False)
+        return
+    logger.warning(
+        "no RAY_ADDRESS set — starting an EMBEDDED local Ray cluster (dev "
+        "only); start infra/scripts/ray-start.sh and export RAY_ADDRESS to "
+        "use the shared cluster"
+    )
+    ray.init(ignore_reinit_error=True, log_to_driver=False)
 
 
 class PipelineExecutor:

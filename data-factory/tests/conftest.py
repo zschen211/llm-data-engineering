@@ -9,7 +9,7 @@ from pathlib import Path
 # Ray reads RAY_ENABLE_UV_RUN_RUNTIME_ENV once, at `import ray` time (see
 # ray/_private/ray_constants.py). Under `uv run` the uv-run runtime-env hook
 # would repackage the working dir for workers; data-factory's pyproject has a
-# path dependency (../llava-instruct) that cannot be rebuilt inside Ray's
+# path dependency (../asset-management) that cannot be rebuilt inside Ray's
 # runtime-env staging dir, which makes every worker crash on startup. The
 # package sets the same flag at import (CLI drivers); tests set it here so it
 # is effective even when `ray` is imported before `data_factory`.

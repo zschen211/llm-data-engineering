@@ -4,46 +4,67 @@ This file provides guidance for AI agents working with code in this repository.
 
 ## Repository layout
 
-The repo is a container of **independent sub-projects**. Each sub-project lives
-in its own top-level folder, is a completely separate Python package (own
-`pyproject.toml`, own dependencies, own tests, own `uv.lock`) and can be
-built/run on its own. There is no shared workspace — do NOT run `uv sync` from
-the repo root and expect sub-project code to be importable; always `cd` into
-the sub-project folder.
+The repo is a **four-layer stack**:
+
+```
+frontend/           pure static SPA (vite+react+ts); UI only, talks to backends over HTTP
+asset-management/   platform service: digital asset layer + management API
+data-factory/       business service: data production & eval closed loop
+mm-rag/             business service: multimodal RAG assistant (phase-2 shared-stack)
+video-generation/   business service: T2V video data pipeline (phase-2)
+infra/              middleware & ops: RustFS/Ray/Prometheus/Grafana/nginx + scripts (declarative)
+```
+
+- Every Python sub-project lives in its own top-level folder and is a
+  completely separate package (own `pyproject.toml`, own dependencies, own
+  tests, own `uv.lock`), built/run on its own. There is no shared workspace —
+  do NOT run `uv sync` from the repo root; always `cd` into the sub-project
+  folder.
+- `infra/` has **no Python code and is never imported**; services connect to
+  middleware only through the contract in `infra/docs/contract.md` (ports /
+  env vars / metric names / API paths / data dirs).
+- `frontend/` is a JS project (npm); it must never import Python packages —
+  it consumes the two backends' `/api/*` endpoints over HTTP only
+  (dev: vite proxy, prod: infra nginx gateway, same path split).
 
 The sub-projects mirror projects 3/5/14 of 《大模型数据工程》
 (datascale-ai.github.io/data_engineering_book/part14/):
 
-- **`llava-instruct/`** — LLaVA multimodal asset factory: unified asset
-  layer (sources/download pipeline/storage/tags/versions/snapshots) with a
-  FastAPI management UI. `sync_source` runs on Ray (one task per file,
-  sliding-window concurrency, crash auto-retry). Programmatic entry:
-  `llava_instruct.assets.api`.
+- **`asset-management/`** — platform service, generic digital asset layer:
+  sources / HF download pipeline / content-addressed storage (local or
+  RustFS) / tags / versions / snapshots, plus a FastAPI management API.
+  `sync_source` runs on Ray (one task per file, sliding-window concurrency,
+  crash auto-retry). Programmatic entry: `asset_management.assets.api`.
 - **`data-factory/`** — data production & eval closed loop on top of the
-  llava-instruct asset layer (strategies/workflows/lineage/model registry/
+  asset-management asset layer (strategies/workflows/lineage/model registry/
   eval/reports, spec in `data-factory/docs/spec/`). Consumes assets only via
-  `llava_instruct.assets.api` (path dependency); own SQLite + storage,
-  Ray Data executor; `dfac` CLI; programmatic entry `data_factory.api`.
+  `asset_management.assets.api` (path dependency); own SQLite + storage,
+  Ray Data executor; FastAPI management API (`data_factory.routes`); `dfac`
+  CLI; programmatic entry `data_factory.api`.
 - **`mm-rag/`** — multimodal RAG assistant for financial report PDFs.
 - **`video-generation/`** — T2V video data pipeline with six resumable,
   shardable stages.
 
-## Commands (run from inside a sub-project folder)
+## Commands
 
 ```bash
-# Install all dependencies (including dev)
+# Python sub-projects (run from inside the sub-project folder)
 uv sync --extra dev
-
-# Run all tests
 uv run pytest
-
-# Run the sub-project CLI / Web UI
-llava-instruct/scripts/serve.sh --port 8000   # asset-manager Web UI
-
-# Build a standalone package
 uv build
 
-# Lint check (run after every code change, see Code quality)
+# Serve the backends
+asset-management/scripts/serve.sh --port 8000   # asset-management API
+data-factory/scripts/serve.sh --port 8001       # data-factory API
+
+# frontend (from frontend/)
+npm install && npm run dev       # http://localhost:5173
+
+# infra (from infra/)
+./scripts/up.sh && ./scripts/ray-start.sh   # middleware + Ray cluster (export RAY_ADDRESS)
+./scripts/obs_check.sh                     # observability smoke
+
+# Lint check (run after every Python code change, see Code quality)
 scripts/run_lint.sh                          # all gates: ruff + radon + pylint + bandit
 uv run ruff check src tests                  # or run them individually
 uv run radon cc src -s -n C                  # must print nothing (complexity <= B)
@@ -67,6 +88,11 @@ uv run bandit -r src -q
   their runtime guard-imports are an accepted, deliberate exception. Do not
   extend this exception to other code and do not introduce new occurrences
   without explicit approval.
+- **Ray cluster:** services attach the shared cluster via `RAY_ADDRESS`
+  (infra contract); when unset they start an embedded local cluster as a dev
+  fallback (loud warning). Tests always use a session-scoped embedded cluster
+  and never touch the shared one. `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` is forced
+  by both packages at import (uv-run path-dependency packaging guard).
 
 ## Conventions
 
@@ -77,11 +103,13 @@ uv run bandit -r src -q
   use docstrings for that).
 - `pytest` runs from each sub-project's own folder; there is no root-level
   test config.
+- Cross-service changes that alter the contract (ports/env/metric names/API
+  paths) must update `infra/docs/contract.md` in the same change.
 
 ## Code quality (MUST follow)
 
-Four lint gates guard every sub-project: **ruff**, **radon**, **pylint** and
-**bandit**. They are configured in each sub-project's `pyproject.toml`
+Four lint gates guard every Python sub-project: **ruff**, **radon**, **pylint**
+and **bandit**. They are configured in each sub-project's `pyproject.toml`
 (`[tool.ruff.lint]`, `[tool.pylint.*]`); `scripts/run_lint.sh` runs all four
 (the same checks are documented in the Commands section).
 

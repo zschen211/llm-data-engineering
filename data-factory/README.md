@@ -1,6 +1,6 @@
 # data-factory
 
-数据生产与评测闭环（数据飞轮）：在 llava-instruct 资产层之上，用**数据策略**
+数据生产与评测闭环（数据飞轮）：在 asset-management 资产层之上，用**数据策略**
 （能力域 → 数据集 → 工作流 → Ray Data 执行 → 产物版本与血缘）生产强化特定能力的
 训练数据，再用**数据评测**（模型注册表 × 评测集 → 逐题评分 → 报告与 badcase 归因）
 反推能力缺口、驱动新一轮数据生产。
@@ -14,8 +14,35 @@ uv sync --extra dev      # 核心 + 测试（ray 等重依赖；gpu extra 可选
 uv run pytest
 ```
 
-与资产层的关系：**不共享 DB、不共享进程**，只通过 `llava_instruct.assets.api`
-消费资产与快照（path 依赖，同仓 `../llava-instruct`）。
+与资产层的关系：**不共享 DB、不共享进程**，只通过 `asset_management.assets.api`
+消费资产与快照（path 依赖，同仓 `../asset-management`）。
+
+## 管理 API（Web）
+
+FastAPI 管理接口（路由全部挂在 `/api/*`，契约见 [../infra/docs/contract.md](../infra/docs/contract.md)）：
+
+```bash
+scripts/serve.sh [--port 8001] [--data-dir data] [--storage rustfs|local]
+# 或：uv run uvicorn data_factory.routes:default_app --factory --port 8001
+```
+
+| 资源 | 端点 |
+| --- | --- |
+| 概览 | `GET /api/factory-info` |
+| 能力域 | `GET/POST /api/capabilities` |
+| 策略 | `GET/POST /api/strategies` |
+| 数据集 | `GET/POST /api/datasets` |
+| 工作流 | `GET/POST /api/workflows`、`GET /api/workflows/{id}`、`POST /api/workflows/{id}/validate` |
+| 运行 | `GET/POST /api/runs`、`GET /api/runs/{id}`、`POST /api/runs/{id}/run`、`POST /api/runs/{id}/cancel` |
+| 阶段注册表 | `GET /api/stages` |
+| 模型 | `GET/POST /api/models`、`POST /api/models/{id}/check`、`POST /api/models/scan`、`DELETE /api/models/{id}` |
+| 评测集 | `GET/POST /api/eval-sets`（items 直接提交）、`GET /api/eval-sets/{id}` |
+| 评测 run | `GET/POST /api/eval-runs`、`GET /api/eval-runs/{id}`、`POST /api/eval-runs/{id}/run` |
+| 报告 | `GET /api/reports`、`GET /api/reports/{id}`、`GET /api/reports/{id}/payload` |
+| 血缘 | `GET /api/lineage?run_id=\|dataset_id=\|strategy_id=` |
+| 指标 | `GET /metrics`（`asset_` 前缀，供 infra Prometheus 抓取） |
+
+Python API 与 CLI 等价（见下）。
 
 ## 最小端到端示例（全部 CPU、离线、确定性）
 
@@ -67,6 +94,7 @@ src/data_factory/
 ├── lineage.py           # 血缘查询：by_run / by_dataset / by_strategy
 ├── input.py             # 输入物化：snapshot（走资产层 API）/ import / derived
 ├── jsonl.py             # 行产物与 manifest 的存储读写
+├── routes/              # FastAPI 管理 API：按资源拆分 + 指标中间件
 ├── meta/                # SQLite 元数据权威（db.py 17 张表 + models.py）
 ├── storage/             # 产物存储：local / S3（RustFS），双轨寻址
 ├── strategies/
@@ -83,7 +111,7 @@ src/data_factory/
     └── service.py       # 评测集导入、评测 run、报告导出（EvalService）
 ```
 
-## 存储布局（bucket `llava-datasets`）
+## 存储布局（bucket `dfac-datasets`）
 
 ```
 blobs/<sha256[:2]>/<sha256>.jsonl     # 内容寻址 result 产物（不可变）

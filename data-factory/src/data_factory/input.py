@@ -1,7 +1,7 @@
 """Dataset input materialization: snapshot / import / derived -> rows.
 
-- ``snapshot``: consumes the llava-instruct asset layer through its public
-  API only (``llava_instruct.assets.api``); tag filters intersect the
+- ``snapshot``: consumes the asset-management asset layer through its public
+  API only (``asset_management.assets.api``); tag filters intersect the
   snapshot's assets. The run pins the snapshot + filters, so later asset
   label drift never changes a run's input.
 - ``import``: rows come from a JSONL manifest (local path or an object key
@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from llava_instruct.assets.api import open_store
+from asset_management.assets.api import open_store
 
 from . import jsonl
 from .meta import models as m
@@ -25,8 +25,8 @@ INPUT_NODE_ID = "input"
 
 def _snapshot_rows(dataset: m.DatasetDefinition) -> list[dict]:
     # data dir is resolved per call so a later env change (tests) is honored
-    # even though llava_instruct binds its default at import time.
-    data_dir = Path(os.environ.get("LLAVA_DATA_DIR", "data"))
+    # even though asset_management binds its default at import time.
+    data_dir = Path(os.environ.get("ASSET_DATA_DIR", "data"))
     with open_store(data_dir=data_dir) as store:
         assets = store.snapshot_assets(dataset.snapshot_id)
         filters = dataset.tag_filters or []

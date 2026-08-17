@@ -4,7 +4,7 @@
 
 ## 1. 概述与目标
 
-data-factory 是 llava-instruct 资产层之上的**数据生产与评测闭环**，包含两个子系统：
+data-factory 是 asset-management 资产层之上的**数据生产与评测闭环**，包含两个子系统：
 
 - **数据策略**：通过定制化数据管线，生产强化模型特定能力的训练数据（例如针对「图片中事实类信息的问答」构建足量、多样的 QA 对，作为指令微调训练集）。
 - **数据评测**：纳管被测模型与评测集，对微调产物评分并产出可复查的分析报告，完成 badcase 归因，反推训练数据缺失的能力域并驱动新一轮数据生产。
@@ -34,25 +34,25 @@ data-factory 是 llava-instruct 资产层之上的**数据生产与评测闭环*
 │  ├─ Ray Data 执行器                               ├─ 评分器(规则/LLM)│
 │  └─ 产物版本与血缘                                └─ 报告与归因      │
 └──────────────┬────────────────────────────────────────┬───────────┘
-               │ 只经 llava_instruct.assets.api 消费       │ 同栈复用
+               │ 只经 asset_management.assets.api 消费       │ 同栈复用
                ▼                                          ▼
-   llava-instruct 资产层（blob/快照/标签/物化）        RustFS + SQLite
+   asset-management 资产层（blob/快照/标签/物化）        RustFS + SQLite
 ```
 
 | 层 | 职责 | 权威性 |
 | --- | --- | --- |
 | SQLite（`data/datafactory.db`） | 能力域/策略/工作流/run/产物血缘/模型/评测集/报告索引 | 血缘、版本、评测结果的**唯一权威** |
-| RustFS（S3 兼容，bucket `llava-datasets`） | 文本类产物（JSONL/parquet）、版本 manifest、评测报告 | 产物内容与对象键的**唯一权威** |
+| RustFS（S3 兼容，bucket `dfac-datasets`） | 文本类产物（JSONL/parquet）、版本 manifest、评测报告 | 产物内容与对象键的**唯一权威** |
 | Ray Data | 策略管线执行、评测推理调度 | 执行引擎 |
-| 资产层（llava-instruct） | 素材 blob、快照、标签、物化 | 输入数据的唯一权威（只读消费） |
+| 资产层（asset-management） | 素材 blob、快照、标签、物化 | 输入数据的唯一权威（只读消费） |
 
-与资产层**不共享 DB、不共享进程**，仅通过 `llava_instruct.assets.api` 消费资产与快照，保持子项目独立可构建。
+与资产层**不共享 DB、不共享进程**，仅通过 `asset_management.assets.api` 消费资产与快照，保持子项目独立可构建。
 
 ## 3. 关键决策记录（ADR）
 
 | 编号 | 决策 | 理由 |
 | --- | --- | --- |
-| D1 | 新建独立子项目 `data-factory`，依赖 llava-instruct（path 依赖） | 仓库独立子项目约定；资产层 API 是唯一稳定入口 |
+| D1 | 新建独立子项目 `data-factory`，依赖 asset-management（path 依赖） | 仓库独立子项目约定；资产层 API 是唯一稳定入口 |
 | D2 | 输入数据集 = 资产层快照引用 + 标签组合过滤，运行即固化；另支持外部导入与派生（上游 dataset 版本） | 可复现 + 支持策略产物级联迭代 |
 | D3 | 工作流按 DAG 建模与校验，v1 执行器只支持链式阶段 | 分支/合并并行需自定义调度，v1 不做 |
 | D4 | 执行引擎 = Ray Data（复用资产层 sync 模式） | 分片/重试/背压/进度开箱即用；单阶段可独立调试 |
@@ -85,10 +85,10 @@ data-factory 是 llava-instruct 资产层之上的**数据生产与评测闭环*
 
 与资产层同思路：单文件、零运维、事务保证 run/血缘/评测记录一致性，表结构按 PostgreSQL 兼容写法。
 
-### 5.2 产物：RustFS（bucket `llava-datasets`）
+### 5.2 产物：RustFS（bucket `dfac-datasets`）
 
 ```
-llava-datasets/
+dfac-datasets/
 ├── datasets/<dataset_id>/v<version>/manifest.json   # 版本清单（不可变）
 ├── artifacts/<run_id>/<node_id>/<file>              # 每阶段中间产物（run 路径寻址，可重跑覆盖）
 └── evals/<eval_set_id>/<report_id>.json / .md       # 评测报告存档
@@ -388,7 +388,7 @@ capability_domain ◄── strategy ──< workflow ──< run ──► run_
 name = "data-factory"
 requires-python = ">=3.11"
 dependencies = [
-    "llava-instruct = {path = \"../llava-instruct\"}",  # 资产层 API（同仓 path 依赖）
+    "asset-management = {path = \"../asset-management\"}",  # 资产层 API（同仓 path 依赖）
     "ray[data,default]>=2.9",
     "fastapi>=0.115.0", "uvicorn>=0.30.0",
     "boto3>=1.34.0", "pyarrow>=16.0.0",
@@ -489,6 +489,6 @@ with open_factory() as factory:            # 环境变量决定后端（同 open
 
 - LLM-judge 稳定性（打分漂移）：prompt 模板配置化 + 抽样人工复核 + 同一评测集固定 judge 模型；
 - gpu extra 体积：CPU 路径与 GPU 路径测试隔离（AGENTS.md 已批准模式）；
-- 子项目间依赖漂移：llava-instruct 以固定版本/path 锁定，资产层 API 变化走版本协商。
+- 子项目间依赖漂移：asset-management 以固定版本/path 锁定，资产层 API 变化走版本协商。
 
 **后续扩展**：完整 DAG 分支/合并并行；数据集产物层平移 Iceberg；评测集自动题目生成器；人工审核 UI（v2）；评测集差异对比（两模型/两版本模型结果 diff）。

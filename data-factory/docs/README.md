@@ -1,6 +1,6 @@
 # data-factory 文档索引
 
-data-factory 是 llava-instruct 资产层之上的**数据生产与评测闭环**（数据策略 + 数据评测），对应《大模型数据工程》项目十四的后续阶段。docs 目录按用途分为三个子目录：
+data-factory 是 asset-management 资产层之上的**数据生产与评测闭环**（数据策略 + 数据评测），对应《大模型数据工程》项目十四的后续阶段。docs 目录按用途分为三个子目录：
 
 | 目录 | 用途 | 包含文件 |
 | --- | --- | --- |
@@ -11,5 +11,5 @@ data-factory 是 llava-instruct 资产层之上的**数据生产与评测闭环*
 ## 阅读建议
 
 - **要改代码或做设计决策** → 读 [spec/data_factory_spec.md](spec/data_factory_spec.md)，了解数据契约与血缘模型
-- **理解与资产层的关系** → 读 llava-instruct 的 `docs/spec/asset_layer_spec.md`（本项目的输入依赖）
+- **理解与资产层的关系** → 读 asset-management 的 `docs/spec/asset_layer_spec.md`（本项目的输入依赖）
 - **要跑起来或使用系统** → 实现完成后查 [manual/](manual/)

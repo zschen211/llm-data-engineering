@@ -25,7 +25,7 @@ class S3StorageBackend(StorageBackend):
         endpoint_url: str | None = None,
         access_key: str = "",
         secret_key: str = "",
-        bucket: str = "llava-datasets",
+        bucket: str = "dfac-datasets",
         region: str = "us-east-1",
     ):
         self.endpoint_url = endpoint_url

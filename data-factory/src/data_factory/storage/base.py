@@ -1,6 +1,6 @@
 """StorageBackend contract: the pluggable artifact-storage abstraction.
 
-Layout (bucket ``llava-datasets`` by default):
+Layout (bucket ``dfac-datasets`` by default):
 
 - ``blobs/<sha256[:2]>/<sha256><ext>`` — content-addressed layer (result
   artifacts; same content stored exactly once)

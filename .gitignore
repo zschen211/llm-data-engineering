@@ -9,6 +9,6 @@ dist/
 .pytest_cache/
 /data/
 /ray-tutorial/
-/llava-instruct/assets.jsonl
-/llava-instruct/pool/
-/llava-instruct/data/
+/asset-management/assets.jsonl
+/asset-management/pool/
+/asset-management/data/
