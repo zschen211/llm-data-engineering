@@ -115,6 +115,31 @@ def test_preview(client):
     assert response.headers["content-type"].startswith("image/png")
 
 
+def test_asset_datasets_endpoint(client):
+    response = client.get("/api/asset-datasets")
+    assert response.status_code == 200
+    datasets = response.json()
+    assert len(datasets) == 1  # one imported source
+    ds = datasets[0]
+    assert ds["name"] == "web-test"
+    assert ds["asset_count"] == 2
+    assert ds["ready_count"] == 2
+    assert ds["failed_count"] == 0
+    assert ds["ready_bytes"] > 0
+    assert ds["tags"] == []
+
+    chart = next(
+        a
+        for a in client.get("/api/assets").json()["items"]
+        if a["asset_type"] == "document_image"
+    )
+    client.post(
+        f"/api/assets/{chart['id']}/tags", json={"name": "doc", "group": "task"}
+    )
+    tagged = client.get("/api/asset-datasets").json()[0]
+    assert tagged["tags"] == ["task=doc"]
+
+
 def test_snapshots_api(client):
     response = client.post("/api/snapshots", json={"name": "v1"})
     assert response.status_code == 201

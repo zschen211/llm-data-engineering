@@ -1,51 +1,36 @@
-// asset pages: the platform service (sources/assets/snapshots/
-// sync runs/downloads/cluster/info) — all under /api/* of :8000.
+// asset pages: the platform service (sources / asset datasets / snapshots /
+// sync runs / downloads) — all under /api/* of :8000.
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { del, get, post, put } from "../api";
+import { Button } from "@/components/ui/button";
 import {
-  Btn,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  CursorPagination,
+  DataTable,
   ErrorNote,
   Field,
+  FieldItem,
   fmtBytes,
   fmtTime,
+  FormModal,
   JsonBlock,
-  Modal,
   Mono,
+  PageContainer,
+  PageSection,
+  StatCard,
   Status,
-  Table,
-  Toast,
-  type Column,
   useFetch,
+  type Column,
 } from "../widgets";
 
-function Page({
-  eyebrow,
-  title,
-  desc,
-  actions,
-  children,
-}: {
-  eyebrow: string;
-  title: string;
-  desc: string;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section>
-      <div className="page-head">
-        <span className="page-eyebrow">{eyebrow}</span>
-        <h1 className="page-title">{title}</h1>
-      </div>
-      <p className="page-desc">{desc}</p>
-      {actions && <div className="page-actions">{actions}</div>}
-      {children}
-    </section>
-  );
-}
-
-// ---- info ------------------------------------------------------------------
+// ---- overview ----------------------------------------------------------------
 
 interface AssetInfo {
   backend: string;
@@ -59,82 +44,63 @@ interface AssetInfo {
   snapshot_count: number;
 }
 
-function InfoPage() {
+function AssetOverviewPage() {
   const { data, error, reload } = useFetch<AssetInfo>("/api/info");
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const backup = async () => {
     try {
       const result = await post<{ path: string }>("/api/backup");
-      setToast({ kind: "ok", message: `已备份元数据库 → ${result.path}` });
+      toast.success(`已备份元数据库 → ${result.path}`);
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="总览"
+    <PageContainer
       desc="数字资产的唯一权威：blob 对象存储 + SQLite 元数据（数据源/标签/版本/快照）。"
       actions={
         <>
-          <Btn onClick={backup}>备份元数据库</Btn>
-          <Btn onClick={reload}>刷新</Btn>
+          <Button variant="outline" onClick={() => void backup()}>
+            备份元数据库
+          </Button>
+          <Button variant="outline" onClick={reload}>
+            刷新
+          </Button>
         </>
       }
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
       {data && (
         <>
-          <div className="cards">
-            <div className="card">
-              <div className="card-label">asset_count</div>
-              <div className="card-value">{data.asset_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">ready</div>
-              <div className="card-value">{data.ready_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">failed</div>
-              <div className="card-value">{data.failed_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">sources</div>
-              <div className="card-value">{data.source_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">snapshots</div>
-              <div className="card-value">{data.snapshot_count}</div>
-            </div>
+          <div className="mb-5 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            <StatCard label="asset_count" value={data.asset_count} />
+            <StatCard label="ready" value={data.ready_count} />
+            <StatCard label="failed" value={data.failed_count} />
+            <StatCard label="sources" value={data.source_count} />
+            <StatCard label="snapshots" value={data.snapshot_count} />
           </div>
-          <div className="detail-grid">
-            <div className="detail-item">
-              <span className="field-label">backend</span>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
+            <FieldItem label="backend">
               <Mono>{data.backend}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">bucket</span>
+            </FieldItem>
+            <FieldItem label="bucket">
               <Mono>{data.bucket ?? "-"}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">data_dir</span>
+            </FieldItem>
+            <FieldItem label="data_dir">
               <Mono>{data.data_dir}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">db_path</span>
+            </FieldItem>
+            <FieldItem label="db_path">
               <Mono>{data.db_path}</Mono>
-            </div>
+            </FieldItem>
           </div>
         </>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
-// ---- sources ---------------------------------------------------------------
+// ---- sources -----------------------------------------------------------------
 
 interface Source {
   id: string;
@@ -151,15 +117,14 @@ function SourcesPage() {
   const { data, error, reload } = useFetch<Source[]>("/api/sources");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Source | null>(null);
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const runAction = async (fn: () => Promise<unknown>, okMsg: string) => {
     try {
       await fn();
-      setToast({ kind: "ok", message: okMsg });
+      toast.success(okMsg);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -191,44 +156,39 @@ function SourcesPage() {
       key: "ops",
       label: "",
       render: (s) => (
-        <span className="page-actions" style={{ margin: 0 }}>
-          <Btn
-            className="btn-sm"
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => void runAction(() => post(`/api/sources/${s.id}/sync`), "已触发同步")}
           >
             sync
-          </Btn>
-          <Btn
-            className="btn-sm"
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => void runAction(() => post(`/api/sources/${s.id}/reprocess`), "已触发重处理")}
           >
             reprocess
-          </Btn>
-          <Btn className="btn-sm" onClick={() => setEditing(s)}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setEditing(s)}>
             编辑
-          </Btn>
-          <Btn className="btn-sm btn-danger" onClick={() => remove(s)}>
+          </Button>
+          <Button size="sm" variant="destructive" onClick={() => remove(s)}>
             删除
-          </Btn>
+          </Button>
         </span>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="数据源"
+    <PageContainer
       desc="互联网资源的元信息与下载源；同步跑在 Ray 上（每文件一个任务，断点续跑）。"
-      actions={
-        <Btn tone="primary" onClick={() => setCreating(true)}>
-          新建数据源
-        </Btn>
-      }
+      actions={<Button onClick={() => setCreating(true)}>新建数据源</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {(creating || editing) && (
         <SourceModal
           source={editing}
@@ -239,12 +199,12 @@ function SourcesPage() {
           onSaved={(msg) => {
             setCreating(false);
             setEditing(null);
-            setToast({ kind: "ok", message: msg });
+            toast.success(msg);
             reload();
           }}
         />
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -295,7 +255,14 @@ function SourceModal({
   };
 
   return (
-    <Modal title={source ? "编辑数据源" : "新建数据源"} onClose={onClose}>
+    <FormModal
+      title={source ? "编辑数据源" : "新建数据源"}
+      onClose={onClose}
+      onConfirm={() => void save()}
+      saving={saving}
+      error={error}
+      confirmLabel="保存"
+    >
       <Field label="name" value={name} onChange={setName} mono />
       <Field label="kind" value={kind} onChange={setKind} mono placeholder="huggingface" />
       <Field label="url" value={url} onChange={setUrl} mono />
@@ -308,18 +275,98 @@ function SourceModal({
         kind="textarea"
         mono
       />
-      <ErrorNote message={error} />
-      <div className="page-actions">
-        <Btn tone="primary" onClick={() => void save()} disabled={saving}>
-          {saving ? "保存中…" : "保存"}
-        </Btn>
-        <Btn onClick={onClose}>取消</Btn>
-      </div>
-    </Modal>
+    </FormModal>
   );
 }
 
-// ---- assets ----------------------------------------------------------------
+// ---- asset datasets ----------------------------------------------------------
+
+interface AssetDataset {
+  id: string;
+  name: string;
+  kind: string;
+  url: string;
+  license: string;
+  description: string;
+  enabled: boolean;
+  asset_count: number;
+  ready_count: number;
+  failed_count: number;
+  pending_count: number;
+  ready_bytes: number;
+  tags: string[];
+  latest_run: {
+    id: string;
+    status: string;
+    stage: string;
+    progress: number;
+    started_at: string;
+    updated_at: string;
+  } | null;
+}
+
+function DatasetList() {
+  const { data, error, reload } = useFetch<AssetDataset[]>("/api/asset-datasets");
+  const [tagFilter, setTagFilter] = useState("");
+  const [open, setOpen] = useState<AssetDataset | null>(null);
+
+  const rows = (data ?? []).filter(
+    (d) => !tagFilter || d.tags.some((t) => t === tagFilter || t.endsWith(`=${tagFilter}`)),
+  );
+
+  const columns: Column<AssetDataset>[] = [
+    { key: "name", label: "dataset", render: (d) => <Mono>{d.name}</Mono> },
+    { key: "kind", label: "kind", render: (d) => <Mono>{d.kind}</Mono> },
+    { key: "tags", label: "tags", render: (d) => d.tags.join(", ") || "-" },
+    { key: "count", label: "assets", render: (d) => <Mono>{d.asset_count}</Mono> },
+    { key: "ready", label: "ready", render: (d) => <Mono>{d.ready_count}</Mono> },
+    { key: "failed", label: "failed", render: (d) => <Mono>{d.failed_count}</Mono> },
+    { key: "bytes", label: "bytes", render: (d) => fmtBytes(d.ready_bytes) },
+    {
+      key: "sync",
+      label: "sync",
+      render: (d) =>
+        d.latest_run ? (
+          <>
+            <Status status={d.latest_run.status} />
+            <Mono>{d.latest_run.id.slice(0, 12)}</Mono>
+          </>
+        ) : (
+          "-"
+        ),
+    },
+    {
+      key: "ops",
+      label: "",
+      render: (d) => (
+        <Button size="sm" variant="outline" onClick={() => setOpen(d)}>
+          查看资产
+        </Button>
+      ),
+    },
+  ];
+
+  return (
+    <>
+      <ErrorNote message={error} />
+      <DataTable
+        columns={columns}
+        rows={rows}
+        toolbar={
+          <>
+            <Field label="tag" value={tagFilter} onChange={setTagFilter} placeholder="group=name" mono />
+            <Button variant="outline" onClick={reload}>
+              刷新
+            </Button>
+          </>
+        }
+      />
+      {open && <DatasetAssets dataset={open} onBack={() => setOpen(null)} />}
+    </>
+  );
+}
+
+// ---- assets within a dataset -------------------------------------------------
 
 interface Asset {
   id: string;
@@ -340,14 +387,19 @@ interface AssetPage {
   page_size: number;
 }
 
-function AssetsPage() {
+function DatasetAssets({
+  dataset,
+  onBack,
+}: {
+  dataset: AssetDataset;
+  onBack: () => void;
+}) {
   const [status, setStatus] = useState("");
   const [tag, setTag] = useState("");
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
-  const params = new URLSearchParams({ page_size: "50" });
+  const params = new URLSearchParams({ page_size: "50", source: dataset.id });
   if (status) {
     params.set("status", status);
   }
@@ -363,12 +415,15 @@ function AssetsPage() {
   const path = `/api/assets?${params.toString()}`;
   const { data, error, reload } = useFetch<AssetPage>(path);
 
+  const notify = (fn: () => Promise<unknown>, okMsg: string) =>
+    fn()
+      .then(() => toast.success(okMsg))
+      .then(reload)
+      .catch((err: unknown) => toast.error(String(err)));
+
   const remove = (asset: Asset) => {
     if (window.confirm(`删除资产「${asset.name}」？`)) {
-      void del(`/api/assets/${asset.id}`)
-        .then(() => setToast({ kind: "ok", message: "已删除" }))
-        .then(reload)
-        .catch((err) => setToast({ kind: "error", message: String(err) }));
+      void notify(() => del(`/api/assets/${asset.id}`), "已删除");
     }
   };
 
@@ -381,10 +436,7 @@ function AssetsPage() {
     if (name == null || !name) {
       return;
     }
-    void post(`/api/assets/${asset.id}/tags`, { name, group })
-      .then(() => setToast({ kind: "ok", message: "已打标" }))
-      .then(reload)
-      .catch((err) => setToast({ kind: "error", message: String(err) }));
+    void notify(() => post(`/api/assets/${asset.id}/tags`, { name, group }), "已打标");
   };
 
   const rollback = (asset: Asset) => {
@@ -392,10 +444,10 @@ function AssetsPage() {
     if (version == null || !version) {
       return;
     }
-    void post(`/api/assets/${asset.id}/rollback`, { version: Number(version) })
-      .then(() => setToast({ kind: "ok", message: "已回滚" }))
-      .then(reload)
-      .catch((err) => setToast({ kind: "error", message: String(err) }));
+    void notify(
+      () => post(`/api/assets/${asset.id}/rollback`, { version: Number(version) }),
+      "已回滚",
+    );
   };
 
   const columns: Column<Asset>[] = [
@@ -418,64 +470,74 @@ function AssetsPage() {
       key: "ops",
       label: "",
       render: (a) => (
-        <span className="page-actions" style={{ margin: 0 }}>
-          <Btn
-            className="btn-sm"
-            title="新窗口预览"
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => window.open(`/api/assets/${a.id}/preview`, "_blank")}
           >
             预览
-          </Btn>
-          <Btn className="btn-sm" onClick={() => tagAsset(a)}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => tagAsset(a)}>
             打标
-          </Btn>
-          <Btn className="btn-sm" onClick={() => rollback(a)}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => rollback(a)}>
             回滚
-          </Btn>
-          <Btn className="btn-sm btn-danger" onClick={() => remove(a)}>
+          </Button>
+          <Button size="sm" variant="destructive" onClick={() => remove(a)}>
             删除
-          </Btn>
+          </Button>
         </span>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="资产"
-      desc="内容寻址 blob + 标签/版本元数据；预览走后端流式接口。"
-      actions={
-        <>
-          <Field label="status" value={status} onChange={setStatus} kind="select" options={["ready", "failed", "processing", "deleted"]} />
-          <Field label="tag" value={tag} onChange={setTag} placeholder="group=name" mono />
-          <Field label="q" value={q} onChange={setQ} placeholder="名称/摘要搜索" />
-          <Btn onClick={reload}>刷新</Btn>
-        </>
-      }
-    >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
+    <PageSection eyebrow={`DATASET · ${dataset.name}`} title={`${dataset.asset_count} 个资产`}>
+      <p className="mb-4 text-sm text-muted-foreground">
+        标签：{dataset.tags.join(", ") || "-"} · 来源：<Mono>{dataset.kind}</Mono>
+      </p>
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data?.items ?? []} />
-      <div className="pagination">
-        <Btn
-          disabled={!cursor}
-          onClick={() => {
-            setCursor(undefined);
-            reload();
-          }}
-        >
-          首页
-        </Btn>
-        <Btn disabled={!data?.next_cursor} onClick={() => setCursor(data?.next_cursor ?? undefined)}>
-          下一页
-        </Btn>
-      </div>
-    </Page>
+      <DataTable
+        columns={columns}
+        rows={data?.items ?? []}
+        toolbar={
+          <>
+            <Field
+              label="status"
+              value={status}
+              onChange={setStatus}
+              kind="select"
+              options={["ready", "failed", "processing", "deleted"]}
+            />
+            <Field label="tag" value={tag} onChange={setTag} placeholder="group=name" mono />
+            <Field label="q" value={q} onChange={setQ} placeholder="名称/摘要搜索" />
+            <Button variant="outline" onClick={reload}>
+              刷新
+            </Button>
+            <Button variant="outline" onClick={onBack}>
+              返回数据集列表
+            </Button>
+          </>
+        }
+        footer={
+          <CursorPagination
+            cursor={cursor}
+            nextCursor={data?.next_cursor}
+            total={dataset.asset_count}
+            onFirst={() => {
+              setCursor(undefined);
+              reload();
+            }}
+            onNext={() => setCursor(data?.next_cursor ?? undefined)}
+          />
+        }
+      />
+    </PageSection>
   );
 }
 
-// ---- snapshots -------------------------------------------------------------
+// ---- snapshots ---------------------------------------------------------------
 
 interface Snapshot {
   id: string;
@@ -485,21 +547,20 @@ interface Snapshot {
   manifest_sha1: string;
 }
 
-function SnapshotsPage() {
+function SnapshotsTab() {
   const { data, error, reload } = useFetch<Snapshot[]>("/api/snapshots");
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const create = async () => {
     try {
       await post("/api/snapshots", { name });
-      setToast({ kind: "ok", message: "快照已创建" });
+      toast.success("快照已创建");
       setName("");
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -512,34 +573,56 @@ function SnapshotsPage() {
   ];
 
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="快照"
-      desc="集合级快照：把当前资产集固化为不可变版本，供 data-factory 数据集引用。"
-      actions={
-        creating ? (
-          <>
-            <Field label="快照名" value={name} onChange={setName} mono placeholder="v1" />
-            <Btn tone="primary" onClick={() => void create()}>
-              创建
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </>
-        ) : (
-          <Btn tone="primary" onClick={() => setCreating(true)}>
-            新建快照
-          </Btn>
-        )
-      }
-    >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
+    <>
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
-    </Page>
+      <DataTable
+        columns={columns}
+        rows={data ?? []}
+        toolbar={
+          <>
+            {creating ? (
+              <>
+                <Field label="快照名" value={name} onChange={setName} mono placeholder="v1" />
+                <Button onClick={() => void create()}>创建</Button>
+                <Button variant="outline" onClick={() => setCreating(false)}>
+                  取消
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => setCreating(true)}>新建快照</Button>
+            )}
+            <Button variant="outline" onClick={reload}>
+              刷新
+            </Button>
+          </>
+        }
+      />
+    </>
   );
 }
 
-// ---- sync runs -------------------------------------------------------------
+function DatasetsPage() {
+  return (
+    <PageContainer
+      desc="同一数据源同步完成的资产归纳为一个数据集；标签区分数据集构成。快照为集合级不可变版本，供 data-factory 引用。"
+    >
+      <Tabs defaultValue="datasets">
+        <TabsList className="mb-4">
+          <TabsTrigger value="datasets">数据集</TabsTrigger>
+          <TabsTrigger value="snapshots">快照</TabsTrigger>
+        </TabsList>
+        <TabsContent value="datasets">
+          <DatasetList />
+        </TabsContent>
+        <TabsContent value="snapshots">
+          <SnapshotsTab />
+        </TabsContent>
+      </Tabs>
+    </PageContainer>
+  );
+}
+
+// ---- sync runs ---------------------------------------------------------------
 
 interface SyncRun {
   id: string;
@@ -557,7 +640,7 @@ interface SyncEvent {
   created_at: string;
 }
 
-function SyncPage() {
+function SyncRunsTab() {
   const { data, error, reload } = useFetch<SyncRun[]>("/api/sync/runs?limit=50");
   const [selected, setSelected] = useState<SyncRun | null>(null);
   const [events, setEvents] = useState<SyncEvent[]>([]);
@@ -574,38 +657,43 @@ function SyncPage() {
     { key: "status", label: "status", render: (r) => <Status status={r.status} /> },
     { key: "started", label: "started_at", render: (r) => <Mono>{fmtTime(r.started_at)}</Mono> },
     { key: "finished", label: "finished_at", render: (r) => <Mono>{fmtTime(r.finished_at)}</Mono> },
-    { key: "ops", label: "", render: (r) => <Btn className="btn-sm" onClick={() => void openRun(r)}>事件</Btn> },
+    {
+      key: "ops",
+      label: "",
+      render: (r) => (
+        <Button size="sm" variant="outline" onClick={() => void openRun(r)}>
+          事件
+        </Button>
+      ),
+    },
   ];
 
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="同步运行"
-      desc="每次 sync/reprocess 一次 run；文件级事件流可复查每步处理。"
-      actions={<Btn onClick={reload}>刷新</Btn>}
-    >
+    <>
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable
+        columns={columns}
+        rows={data ?? []}
+        toolbar={
+          <Button variant="outline" onClick={reload}>
+            刷新
+          </Button>
+        }
+      />
       {selected && (
-        <div style={{ marginTop: 20 }}>
-          <div className="page-head">
-            <span className="page-eyebrow">SYNC · {selected.id}</span>
-            <h2 className="page-title" style={{ fontSize: 15 }}>
-              事件流
-            </h2>
-          </div>
+        <PageSection eyebrow={`SYNC · ${selected.id}`} title="事件流">
           {events.length === 0 ? (
             <JsonBlock value="（暂无事件）" />
           ) : (
             <JsonBlock value={events} />
           )}
-        </div>
+        </PageSection>
       )}
-    </Page>
+    </>
   );
 }
 
-// ---- downloads -------------------------------------------------------------
+// ---- downloads ---------------------------------------------------------------
 
 interface Download {
   asset_name: string;
@@ -615,7 +703,7 @@ interface Download {
   error: string | null;
 }
 
-function DownloadsPage() {
+function DownloadsTab() {
   const { data, error, reload } = useFetch<Download[]>("/api/downloads?limit=50");
 
   const columns: Column<Download>[] = [
@@ -627,71 +715,50 @@ function DownloadsPage() {
   ];
 
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="下载记录"
-      desc="每文件的下载流水账（含失败原因），用于排查网络源问题。"
-      actions={<Btn onClick={reload}>刷新</Btn>}
-    >
+    <>
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
-    </Page>
+      <DataTable
+        columns={columns}
+        rows={data ?? []}
+        toolbar={
+          <Button variant="outline" onClick={reload}>
+            刷新
+          </Button>
+        }
+      />
+    </>
   );
 }
 
-// ---- cluster ---------------------------------------------------------------
-
-interface ClusterStatus {
-  initialized: boolean;
-  address: string;
-  dashboard_url: string;
-  logs_dir: string;
-  metrics_port: number;
-  total_cpus: number;
-  available_cpus: number;
-  alive_nodes: number;
-  running_tasks: number;
-  alive_actors: number;
-}
-
-function ClusterPage() {
-  const { data, error, reload } = useFetch<ClusterStatus>("/api/cluster/status");
-
+function RecordsPage() {
   return (
-    <Page
-      eyebrow="ASSET · 资产层"
-      title="Ray 集群"
-      desc="infra 契约变量 RAY_ADDRESS 连接的共享集群；未配置时为内嵌兜底集群。"
-      actions={<Btn onClick={reload}>刷新</Btn>}
+    <PageContainer
+      desc="每次 sync/reprocess 一次 run（文件级事件流可复查）；下载流水账含失败原因。"
     >
-      <ErrorNote message={error} />
-      {data && (
-        <div className="detail-grid">
-          {Object.entries(data).map(([k, v]) => (
-            <div className="detail-item" key={k}>
-              <span className="field-label">{k}</span>
-              <Mono>{typeof v === "boolean" ? (v ? "true" : "false") : String(v ?? "")}</Mono>
-            </div>
-          ))}
-        </div>
-      )}
-      {data?.dashboard_url && (
-        <p className="page-desc" style={{ marginTop: 14 }}>
-          <a href={data.dashboard_url} target="_blank" rel="noreferrer">
-            {data.dashboard_url}
-          </a>
-        </p>
-      )}
-    </Page>
+      <Tabs defaultValue="sync">
+        <TabsList className="mb-4">
+          <TabsTrigger value="sync">同步运行</TabsTrigger>
+          <TabsTrigger value="downloads">下载记录</TabsTrigger>
+        </TabsList>
+        <TabsContent value="sync">
+          <SyncRunsTab />
+        </TabsContent>
+        <TabsContent value="downloads">
+          <DownloadsTab />
+        </TabsContent>
+      </Tabs>
+    </PageContainer>
   );
 }
+
+export const assetOverviewPage = {
+  key: "overview",
+  label: "总览",
+  component: AssetOverviewPage,
+};
 
 export const assetPages = [
-  { key: "info", label: "总览", component: InfoPage },
   { key: "sources", label: "数据源", component: SourcesPage },
-  { key: "assets", label: "资产", component: AssetsPage },
-  { key: "snapshots", label: "快照", component: SnapshotsPage },
-  { key: "sync", label: "同步", component: SyncPage },
-  { key: "downloads", label: "下载", component: DownloadsPage },
-  { key: "cluster", label: "集群", component: ClusterPage },
+  { key: "datasets", label: "数据集", component: DatasetsPage },
+  { key: "records", label: "同步/下载记录", component: RecordsPage },
 ];

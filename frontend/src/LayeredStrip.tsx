@@ -55,18 +55,22 @@ export function LayeredStrip({
   const toneFor = (ok: boolean): "ok" | "warn" | "danger" => (ok ? "ok" : "danger");
 
   const layers = [
-    { tag: "01 infra", name: "INFRA", meta: infraMeta, hash: "#/cluster", tone: toneFor(cluster?.initialized ?? false) },
-    { tag: "02 asset", name: "ASSET", meta: assetMeta, hash: "#/info", tone: toneFor(!!assetInfo) },
-    { tag: "03 factory", name: "FACTORY", meta: factoryMeta, hash: "#/overview", tone: toneFor(!!factory) },
-    { tag: "04 ui", name: "CONSOLE", meta: "single origin · /api split", hash: "#/info", tone: "ok" as const },
+    { tag: "01 infra", name: "INFRA", meta: infraMeta, hash: "#/infra", tone: toneFor(cluster?.initialized ?? false) },
+    { tag: "02 asset", name: "ASSET", meta: assetMeta, hash: "#/asset", tone: toneFor(!!assetInfo) },
+    { tag: "03 factory", name: "FACTORY", meta: factoryMeta, hash: "#/factory", tone: toneFor(!!factory) },
+    { tag: "04 ui", name: "CONSOLE", meta: "single origin · /api split", hash: "#/asset", tone: "ok" as const },
   ];
 
   return (
-    <div className="strip" role="navigation" aria-label="服务分层状态">
+    <div
+      className="grid grid-cols-2 gap-2.5 border-b-2 border-primary bg-[linear-gradient(180deg,#1a2436,#16202e)] px-4 py-3 text-[#dbe3f0] lg:grid-cols-4"
+      role="navigation"
+      aria-label="服务分层状态"
+    >
       {layers.map((layer) => (
         <div
           key={layer.tag}
-          className="layer"
+          className="cursor-pointer border border-[#33415c] border-t-2 border-t-primary bg-white/[0.03] px-3 py-2 transition-colors hover:bg-primary/20"
           onClick={() => onNavigate(layer.hash)}
           role="button"
           tabIndex={0}
@@ -76,12 +80,14 @@ export function LayeredStrip({
             }
           }}
         >
-          <div className="layer-tag">{layer.tag}</div>
-          <div className="layer-name">
+          <div className="font-mono text-xs uppercase tracking-widest text-[#7f93b5]">
+            {layer.tag}
+          </div>
+          <div className="my-0.5 flex items-center font-mono text-base font-semibold text-white">
             <Dot tone={layer.tone} />
             {layer.name}
           </div>
-          <div className="layer-meta">{layer.meta}</div>
+          <div className="truncate text-xs text-[#aab8d0]">{layer.meta}</div>
         </div>
       ))}
     </div>

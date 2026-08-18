@@ -97,3 +97,46 @@ class AssetsService:
 
     def list_downloads(self, limit: int = 100) -> list[dict]:
         return self._db.list_downloads(limit=limit)
+
+    def list_datasets(self) -> list[dict]:
+        """Dataset aggregation for the console: one dataset per data source.
+
+        An asset dataset is the set of assets synced from one source,
+        discriminated by tags; the list carries per-source status counts,
+        ready bytes and the latest sync run so the console can render an
+        overview table without walking every asset.
+        """
+        stats = self._db.dataset_stats()
+        datasets = []
+        for source in self._db.list_sources():
+            stat = stats.get(source.id, {})
+            counts = stat.get("status_counts", {})
+            latest = stat.get("latest_run")
+            datasets.append(
+                {
+                    "id": source.id,
+                    "name": source.name,
+                    "kind": source.kind,
+                    "url": source.url,
+                    "license": source.license,
+                    "description": source.description,
+                    "enabled": source.enabled,
+                    "asset_count": sum(counts.values()),
+                    "ready_count": counts.get("ready", 0),
+                    "failed_count": counts.get("failed", 0),
+                    "pending_count": counts.get("pending", 0)
+                    + counts.get("downloading", 0),
+                    "ready_bytes": stat.get("ready_bytes", 0),
+                    "tags": sorted(stat.get("tags", [])),
+                    "latest_run": latest
+                    and {
+                        "id": latest["id"],
+                        "status": latest["status"],
+                        "stage": latest["current_stage"],
+                        "progress": latest["progress"],
+                        "started_at": latest["created_at"],
+                        "updated_at": latest["updated_at"],
+                    },
+                }
+            )
+        return datasets

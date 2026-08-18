@@ -66,6 +66,10 @@ npm install && npm run dev       # http://localhost:5173
 ./scripts/up.sh && ./scripts/ray-start.sh   # middleware + Ray cluster (export RAY_ADDRESS)
 ./scripts/obs_check.sh                     # observability smoke
 
+# Whole dev stack in one command (from the repo root): infra + ray +
+# backends + frontend; idempotent. See scripts/dev.sh.
+./scripts/dev.sh up | down | status | logs
+
 # Lint check (run after every Python code change, see Code quality)
 scripts/run_lint.sh                          # all gates: ruff + radon + pylint + bandit
 uv run ruff check src tests                  # or run them individually
@@ -108,6 +112,14 @@ uv run bandit -r src -q
   test config.
 - Cross-service changes that alter the contract (ports/env/metric names/API
   paths) must update `infra/docs/contract.md` in the same change.
+- **Frontend styling constraint:** the console is styled with **Tailwind CSS
+  v4 + shadcn/ui** only. All UI primitives live in `frontend/src/components/ui/`
+  (shadcn registry, theme tokens in `src/index.css` CSS variables); page code
+  must use those components + Tailwind utility classes and never re-introduce
+  bespoke CSS classes/files. Pages must follow the shared templates in
+  `frontend/src/widgets.tsx`: `PageContainer` (header/desc/actions) →
+  optional `Tabs` → `DataTable` (toolbar/table/footer, `CursorPagination`) and
+  `FormModal` for create/edit dialogs — no hand-rolled page layouts.
 
 ## Code quality (MUST follow)
 

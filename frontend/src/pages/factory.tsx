@@ -3,47 +3,26 @@
 // — all under /api/* of :8001.
 
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { del, get, post } from "../api";
+import { Button } from "@/components/ui/button";
 import {
-  Btn,
+  DataTable,
   ErrorNote,
   Field,
+  FieldItem,
   fmtTime,
+  FormModal,
   JsonBlock,
   Modal,
   Mono,
+  PageContainer,
+  StatCard,
   Status,
   Table,
-  Toast,
-  type Column,
   useFetch,
+  type Column,
 } from "../widgets";
-
-function Page({
-  eyebrow,
-  title,
-  desc,
-  actions,
-  children,
-}: {
-  eyebrow: string;
-  title: string;
-  desc: string;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section>
-      <div className="page-head">
-        <span className="page-eyebrow">{eyebrow}</span>
-        <h1 className="page-title">{title}</h1>
-      </div>
-      <p className="page-desc">{desc}</p>
-      {actions && <div className="page-actions">{actions}</div>}
-      {children}
-    </section>
-  );
-}
 
 // ---- simple CRUD helper ------------------------------------------------------
 
@@ -76,7 +55,6 @@ function SimpleCrud<T extends { id: string }>({
   const { data, error, reload } = useFetch<T[]>(base);
   const [creating, setCreating] = useState(false);
   const [body, setBody] = useState<Record<string, unknown>>({});
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const openCreate = () => {
     setBody({ ...emptyBody });
@@ -86,11 +64,11 @@ function SimpleCrud<T extends { id: string }>({
   const submit = async () => {
     try {
       await post(base, body);
-      setToast({ kind: "ok", message: `已创建到 ${base}` });
+      toast.success(`已创建到 ${base}`);
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -102,21 +80,19 @@ function SimpleCrud<T extends { id: string }>({
     : columns;
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title={title}
+    <PageContainer
       desc={desc}
-      actions={
-        <Btn tone="primary" onClick={openCreate}>
-          新建
-        </Btn>
-      }
+      actions={<Button onClick={openCreate}>新建</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={allColumns} rows={data ?? []} />
+      <DataTable columns={allColumns} rows={data ?? []} />
       {creating && (
-        <Modal title={`新建${title}`} onClose={() => setCreating(false)}>
+        <FormModal
+          title={`新建${title}`}
+          onClose={() => setCreating(false)}
+          onConfirm={() => void submit()}
+          confirmLabel="创建"
+        >
           {fields.map((f) => (
             <Field
               key={f.name}
@@ -129,15 +105,9 @@ function SimpleCrud<T extends { id: string }>({
               onChange={(v) => setBody((b) => ({ ...b, [f.name]: v }))}
             />
           ))}
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void submit()}>
-              创建
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -160,70 +130,47 @@ interface FactoryInfo {
   report_count: number;
 }
 
-function OverviewPage() {
+function FactoryOverviewPage() {
   const { data, error, reload } = useFetch<FactoryInfo>("/api/factory-info");
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="总览"
+    <PageContainer
       desc="数据生产与评测闭环：策略管线产训练数据，评测反推能力缺口，驱动新一轮生产。"
-      actions={<Btn onClick={reload}>刷新</Btn>}
+      actions={
+        <Button variant="outline" onClick={reload}>
+          刷新
+        </Button>
+      }
     >
       <ErrorNote message={error} />
       {data && (
         <>
-          <div className="cards">
-            <div className="card">
-              <div className="card-label">capabilities</div>
-              <div className="card-value">{data.capability_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">strategies</div>
-              <div className="card-value">{data.strategy_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">workflows</div>
-              <div className="card-value">{data.workflow_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">runs</div>
-              <div className="card-value">{data.run_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">models</div>
-              <div className="card-value">{data.model_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">eval runs</div>
-              <div className="card-value">{data.eval_run_count}</div>
-            </div>
-            <div className="card">
-              <div className="card-label">reports</div>
-              <div className="card-value">{data.report_count}</div>
-            </div>
+          <div className="mb-5 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
+            <StatCard label="capabilities" value={data.capability_count} />
+            <StatCard label="strategies" value={data.strategy_count} />
+            <StatCard label="workflows" value={data.workflow_count} />
+            <StatCard label="runs" value={data.run_count} />
+            <StatCard label="models" value={data.model_count} />
+            <StatCard label="eval runs" value={data.eval_run_count} />
+            <StatCard label="reports" value={data.report_count} />
           </div>
-          <div className="detail-grid">
-            <div className="detail-item">
-              <span className="field-label">backend</span>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
+            <FieldItem label="backend">
               <Mono>{data.backend}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">bucket</span>
+            </FieldItem>
+            <FieldItem label="bucket">
               <Mono>{data.bucket ?? "-"}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">data_dir</span>
+            </FieldItem>
+            <FieldItem label="data_dir">
               <Mono>{data.data_dir}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">models_dir</span>
+            </FieldItem>
+            <FieldItem label="models_dir">
               <Mono>{data.models_dir}</Mono>
-            </div>
+            </FieldItem>
           </div>
         </>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -310,17 +257,16 @@ function DatasetsPage() {
     import_manifest: "",
     derived_from: "",
   });
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const submit = async () => {
     try {
       const tag_filters = JSON.parse(body.tag_filters || "[]");
       await post("/api/datasets", { ...body, tag_filters });
-      setToast({ kind: "ok", message: "数据集已创建" });
+      toast.success("数据集已创建");
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -335,21 +281,19 @@ function DatasetsPage() {
   ];
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="数据集"
+    <PageContainer
       desc="run 的输入定义：资产快照+标签过滤（运行即固化）/ 外部导入 / 上游数据集版本派生。"
-      actions={
-        <Btn tone="primary" onClick={() => setCreating(true)}>
-          新建数据集
-        </Btn>
-      }
+      actions={<Button onClick={() => setCreating(true)}>新建数据集</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {creating && (
-        <Modal title="新建数据集" onClose={() => setCreating(false)}>
+        <FormModal
+          title="新建数据集"
+          onClose={() => setCreating(false)}
+          onConfirm={() => void submit()}
+          confirmLabel="创建"
+        >
           <Field label="name" value={body.name} onChange={set("name")} mono />
           <Field
             label="source_type"
@@ -376,15 +320,9 @@ function DatasetsPage() {
           {body.source_type === "derived" && (
             <Field label="derived_from (id@version)" value={body.derived_from} onChange={set("derived_from")} mono />
           )}
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void submit()}>
-              创建
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -407,17 +345,16 @@ function WorkflowsPage() {
   const [creating, setCreating] = useState(false);
   const [show, setShow] = useState<WorkflowShow | null>(null);
   const [body, setBody] = useState({ name: "", strategy_id: "", stages: "[{\"stage\":\"schema_check\"}]", description: "" });
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const submit = async () => {
     try {
       const stages = JSON.parse(body.stages);
       await post("/api/workflows", { ...body, stages });
-      setToast({ kind: "ok", message: "工作流已定义" });
+      toast.success("工作流已定义");
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -427,16 +364,16 @@ function WorkflowsPage() {
     try {
       setShow(await get<WorkflowShow>(`/api/workflows/${id}`));
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
   const validate = async (id: string) => {
     try {
       const result = await post<{ order: string[] }>(`/api/workflows/${id}/validate`);
-      setToast({ kind: "ok", message: `校验通过：${result.order.length} 个节点` });
+      toast.success(`校验通过：${result.order.length} 个节点`);
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -448,35 +385,37 @@ function WorkflowsPage() {
       key: "ops",
       label: "",
       render: (w) => (
-        <span className="page-actions" style={{ margin: 0 }}>
-          <Btn className="btn-sm" onClick={() => void viewWorkflow(w.id)}>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => void viewWorkflow(w.id)}>
             查看
-          </Btn>
-          <Btn className="btn-sm" onClick={() => void validate(w.id)}>
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void validate(w.id)}>
             校验
-          </Btn>
+          </Button>
         </span>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="工作流"
+    <PageContainer
       desc="链式阶段 DAG：transform / qc_rule / qc_llm / publish（sink）。stages 为 JSON 数组。"
-      actions={<Btn tone="primary" onClick={() => setCreating(true)}>定义工作流</Btn>}
+      actions={<Button onClick={() => setCreating(true)}>定义工作流</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {show && (
         <Modal title={show.workflow_id} onClose={() => setShow(null)}>
           <JsonBlock value={show} />
         </Modal>
       )}
       {creating && (
-        <Modal title="定义工作流" onClose={() => setCreating(false)}>
+        <FormModal
+          title="定义工作流"
+          onClose={() => setCreating(false)}
+          onConfirm={() => void submit()}
+          confirmLabel="定义"
+        >
           <Field label="name" value={body.name} onChange={set("name")} mono />
           <Field label="strategy_id" value={body.strategy_id} onChange={set("strategy_id")} mono />
           <Field
@@ -487,15 +426,9 @@ function WorkflowsPage() {
             mono
           />
           <Field label="description" value={body.description} onChange={set("description")} />
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void submit()}>
-              定义
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -527,28 +460,27 @@ function RunsPage() {
   const [creating, setCreating] = useState(false);
   const [show, setShow] = useState<RunShow | null>(null);
   const [body, setBody] = useState({ workflow_id: "", input_dataset_id: "" });
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const set = (name: string) => (v: string) => setBody((b) => ({ ...b, [name]: v }));
 
   const runAction = async (fn: () => Promise<unknown>, okMsg: string) => {
     try {
       await fn();
-      setToast({ kind: "ok", message: okMsg });
+      toast.success(okMsg);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
   const createRun = async () => {
     try {
       const run = await post<Run>("/api/runs", body);
-      setToast({ kind: "ok", message: `run 已创建：${run.id}` });
+      toast.success(`run 已创建：${run.id}`);
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -562,66 +494,69 @@ function RunsPage() {
       key: "ops",
       label: "",
       render: (r) => (
-        <span className="page-actions" style={{ margin: 0 }}>
-          <Btn
-            className="btn-sm"
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
             disabled={r.status === "running"}
             onClick={() => void runAction(() => post(`/api/runs/${r.id}/run`), "已启动执行")}
           >
             执行
-          </Btn>
-          <Btn className="btn-sm" onClick={() => void get<RunShow>(`/api/runs/${r.id}`).then(setShow).catch((err) => setToast({ kind: "error", message: String(err) }))}>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              void get<RunShow>(`/api/runs/${r.id}`)
+                .then(setShow)
+                .catch((err: unknown) => toast.error(String(err)))
+            }
+          >
             详情
-          </Btn>
-          <Btn
-            className="btn-sm btn-danger"
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
             disabled={r.status !== "running"}
             onClick={() => void runAction(() => post(`/api/runs/${r.id}/cancel`), "已取消")}
           >
             取消
-          </Btn>
+          </Button>
         </span>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="运行"
+    <PageContainer
       desc="工作流 × 输入数据集的一次执行；Ray Data 链式跑，断点可续。"
-      actions={<Btn tone="primary" onClick={() => setCreating(true)}>新建 run</Btn>}
+      actions={<Button onClick={() => setCreating(true)}>新建 run</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {creating && (
-        <Modal title="新建 run" onClose={() => setCreating(false)}>
+        <FormModal
+          title="新建 run"
+          onClose={() => setCreating(false)}
+          onConfirm={() => void createRun()}
+          confirmLabel="创建"
+        >
           <Field label="workflow_id" value={body.workflow_id} onChange={set("workflow_id")} mono />
           <Field label="input_dataset_id" value={body.input_dataset_id} onChange={set("input_dataset_id")} mono />
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void createRun()}>
-              创建
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
       {show && (
         <Modal title={`run ${show.run.id}`} onClose={() => setShow(null)}>
-          <div className="detail-grid">
-            <div className="detail-item">
-              <span className="field-label">status</span>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
+            <FieldItem label="status">
               <Status status={show.run.status} />
-            </div>
-            <div className="detail-item">
-              <span className="field-label">workflow</span>
+            </FieldItem>
+            <FieldItem label="workflow">
               <Mono>{show.run.workflow_id}</Mono>
-            </div>
-            <div className="detail-item">
-              <span className="field-label">dataset</span>
+            </FieldItem>
+            <FieldItem label="dataset">
               <Mono>{show.run.input_dataset_id}</Mono>
-            </div>
+            </FieldItem>
           </div>
           <Table
             columns={[
@@ -635,7 +570,7 @@ function RunsPage() {
           />
         </Modal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -652,14 +587,16 @@ function StagesPage() {
   const { data, error, reload } = useFetch<StageInfo[]>("/api/stages");
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="阶段注册表"
+    <PageContainer
       desc="内置管线阶段；配置结构见 config_schema。"
-      actions={<Btn onClick={reload}>刷新</Btn>}
+      actions={
+        <Button variant="outline" onClick={reload}>
+          刷新
+        </Button>
+      }
     >
       <ErrorNote message={error} />
-      <Table
+      <DataTable
         columns={[
           { key: "name", label: "name", render: (s) => <Mono>{s.name}</Mono> },
           { key: "kind", label: "kind", render: (s) => <Mono>{s.kind}</Mono> },
@@ -667,7 +604,7 @@ function StagesPage() {
         ]}
         rows={data ?? []}
       />
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -694,28 +631,27 @@ function ModelsPage() {
     base_url: "",
     api_key_env: "",
   });
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const set = (name: string) => (v: string) => setBody((b) => ({ ...b, [name]: v }));
 
   const runAction = async (fn: () => Promise<unknown>, okMsg: string) => {
     try {
       await fn();
-      setToast({ kind: "ok", message: okMsg });
+      toast.success(okMsg);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
   const register = async () => {
     try {
       await post("/api/models", body);
-      setToast({ kind: "ok", message: "模型已注册" });
+      toast.success("模型已注册");
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -729,41 +665,61 @@ function ModelsPage() {
       key: "ops",
       label: "",
       render: (m) => (
-        <span className="page-actions" style={{ margin: 0 }}>
-          <Btn className="btn-sm" onClick={() => void runAction(() => post(`/api/models/${m.id}/check`), "心跳已刷新")}>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void runAction(() => post(`/api/models/${m.id}/check`), "心跳已刷新")}
+          >
             check
-          </Btn>
-          <Btn className="btn-sm btn-danger" onClick={() => window.confirm(`删除模型「${m.name}」？`) && void runAction(() => del(`/api/models/${m.id}`), "已删除")}>
+          </Button>
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() =>
+              window.confirm(`删除模型「${m.name}」？`) &&
+              void runAction(() => del(`/api/models/${m.id}`), "已删除")
+            }
+          >
             删除
-          </Btn>
+          </Button>
         </span>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="模型注册表"
+    <PageContainer
       desc="local（checkpoint 目录）/ vllm / api（OpenAI 兼容）；api_key 只存环境变量名。"
       actions={
         <>
-          <Btn tone="primary" onClick={() => setCreating(true)}>
-            注册模型
-          </Btn>
-          <Btn onClick={() => void runAction(() => post("/api/models/scan"), "目录扫描完成")}>
+          <Button onClick={() => setCreating(true)}>注册模型</Button>
+          <Button
+            variant="outline"
+            onClick={() => void runAction(() => post("/api/models/scan"), "目录扫描完成")}
+          >
             扫描本地模型
-          </Btn>
+          </Button>
         </>
       }
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {creating && (
-        <Modal title="注册模型" onClose={() => setCreating(false)}>
+        <FormModal
+          title="注册模型"
+          onClose={() => setCreating(false)}
+          onConfirm={() => void register()}
+          confirmLabel="注册"
+        >
           <Field label="name" value={body.name} onChange={set("name")} mono />
-          <Field label="backend" value={body.backend} onChange={set("backend")} kind="select" options={["api", "vllm", "local"]} />
+          <Field
+            label="backend"
+            value={body.backend}
+            onChange={set("backend")}
+            kind="select"
+            options={["api", "vllm", "local"]}
+          />
           {body.backend === "local" && <Field label="weights_dir" value={body.weights_dir} onChange={set("weights_dir")} mono />}
           {(body.backend === "api" || body.backend === "vllm") && (
             <Field label="base_url" value={body.base_url} onChange={set("base_url")} mono />
@@ -772,15 +728,9 @@ function ModelsPage() {
             <Field label="api_key_env" value={body.api_key_env} onChange={set("api_key_env")} mono />
           )}
           <Field label="model_id" value={body.model_id} onChange={set("model_id")} mono />
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void register()}>
-              注册
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -803,7 +753,6 @@ function EvalSetsPage() {
   const [creating, setCreating] = useState(false);
   const [show, setShow] = useState<EvalSetShow | null>(null);
   const [body, setBody] = useState({ name: "", capability_domain_id: "", items: "[]" });
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const set = (name: string) => (v: string) => setBody((b) => ({ ...b, [name]: v }));
 
@@ -811,11 +760,11 @@ function EvalSetsPage() {
     try {
       const items = JSON.parse(body.items);
       await post("/api/eval-sets", { ...body, items });
-      setToast({ kind: "ok", message: "评测集已导入" });
+      toast.success("评测集已导入");
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -827,35 +776,39 @@ function EvalSetsPage() {
       key: "ops",
       label: "",
       render: (e) => (
-        <Btn className="btn-sm" onClick={() => void get<EvalSetShow>(`/api/eval-sets/${e.id}`).then(setShow).catch((err) => setToast({ kind: "error", message: String(err) }))}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() =>
+            void get<EvalSetShow>(`/api/eval-sets/${e.id}`)
+              .then(setShow)
+              .catch((err: unknown) => toast.error(String(err)))
+          }
+        >
           查看
-        </Btn>
+        </Button>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="评测集"
+    <PageContainer
       desc="JSONL 行：{question: 文本或{text,images}, expected, category?}。items 直接以 JSON 数组提交。"
-      actions={<Btn tone="primary" onClick={() => setCreating(true)}>导入评测集</Btn>}
+      actions={<Button onClick={() => setCreating(true)}>导入评测集</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {creating && (
-        <Modal title="导入评测集" onClose={() => setCreating(false)}>
+        <FormModal
+          title="导入评测集"
+          onClose={() => setCreating(false)}
+          onConfirm={() => void create()}
+          confirmLabel="导入"
+        >
           <Field label="name" value={body.name} onChange={set("name")} mono />
           <Field label="capability_domain_id" value={body.capability_domain_id} onChange={set("capability_domain_id")} mono />
           <Field label="items (json)" value={body.items} onChange={set("items")} kind="textarea" mono />
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void create()}>
-              导入
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
       {show && (
         <Modal title={`评测集 ${show.eval_set.name}`} onClose={() => setShow(null)}>
@@ -870,7 +823,7 @@ function EvalSetsPage() {
           />
         </Modal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -897,28 +850,27 @@ function EvalRunsPage() {
   const [creating, setCreating] = useState(false);
   const [show, setShow] = useState<EvalRunShow | null>(null);
   const [body, setBody] = useState({ eval_set_id: "", model_id: "" });
-  const [toast, setToast] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
   const set = (name: string) => (v: string) => setBody((b) => ({ ...b, [name]: v }));
 
   const runAction = async (fn: () => Promise<unknown>, okMsg: string) => {
     try {
       await fn();
-      setToast({ kind: "ok", message: okMsg });
+      toast.success(okMsg);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
   const create = async () => {
     try {
       const run = await post<EvalRun>("/api/eval-runs", body);
-      setToast({ kind: "ok", message: `评测 run 已创建：${run.id}` });
+      toast.success(`评测 run 已创建：${run.id}`);
       setCreating(false);
       reload();
     } catch (err) {
-      setToast({ kind: "error", message: String(err) });
+      toast.error(String(err));
     }
   };
 
@@ -932,55 +884,58 @@ function EvalRunsPage() {
       key: "ops",
       label: "",
       render: (r) => (
-        <span className="page-actions" style={{ margin: 0 }}>
-          <Btn
-            className="btn-sm"
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
             disabled={r.status === "running"}
             onClick={() => void runAction(() => post(`/api/eval-runs/${r.id}/run`), "已启动评测")}
           >
             运行
-          </Btn>
-          <Btn className="btn-sm" onClick={() => void get<EvalRunShow>(`/api/eval-runs/${r.id}`).then(setShow).catch((err) => setToast({ kind: "error", message: String(err) }))}>
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              void get<EvalRunShow>(`/api/eval-runs/${r.id}`)
+                .then(setShow)
+                .catch((err: unknown) => toast.error(String(err)))
+            }
+          >
             结果
-          </Btn>
+          </Button>
         </span>
       ),
     },
   ];
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="评测运行"
+    <PageContainer
       desc="就绪模型 × 评测集 → 逐题评分 → 报告。模型需先 check 通过。"
-      actions={<Btn tone="primary" onClick={() => setCreating(true)}>新建评测</Btn>}
+      actions={<Button onClick={() => setCreating(true)}>新建评测</Button>}
     >
-      {toast && <Toast kind={toast.kind} message={toast.message} />}
       <ErrorNote message={error} />
-      <Table columns={columns} rows={data ?? []} />
+      <DataTable columns={columns} rows={data ?? []} />
       {creating && (
-        <Modal title="新建评测" onClose={() => setCreating(false)}>
+        <FormModal
+          title="新建评测"
+          onClose={() => setCreating(false)}
+          onConfirm={() => void create()}
+          confirmLabel="创建"
+        >
           <Field label="eval_set_id" value={body.eval_set_id} onChange={set("eval_set_id")} mono />
           <Field label="model_id" value={body.model_id} onChange={set("model_id")} mono />
-          <div className="page-actions">
-            <Btn tone="primary" onClick={() => void create()}>
-              创建
-            </Btn>
-            <Btn onClick={() => setCreating(false)}>取消</Btn>
-          </div>
-        </Modal>
+        </FormModal>
       )}
       {show && (
         <Modal title={`评测 ${show.eval_run.id} · ${show.model}`} onClose={() => setShow(null)}>
-          <div className="detail-grid">
-            <div className="detail-item">
-              <span className="field-label">status</span>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2.5">
+            <FieldItem label="status">
               <Status status={show.eval_run.status} />
-            </div>
-            <div className="detail-item">
-              <span className="field-label">score</span>
+            </FieldItem>
+            <FieldItem label="score">
               <Mono>{show.eval_run.overall_score ?? "-"}</Mono>
-            </div>
+            </FieldItem>
           </div>
           <Table
             columns={[
@@ -993,7 +948,7 @@ function EvalRunsPage() {
           />
         </Modal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -1011,14 +966,16 @@ function ReportsPage() {
   const [payload, setPayload] = useState<unknown | null>(null);
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="评测报告"
+    <PageContainer
       desc="聚合指标 + badcase 血缘链 + 归因建议；payload 为完整 JSON。"
-      actions={<Btn onClick={reload}>刷新</Btn>}
+      actions={
+        <Button variant="outline" onClick={reload}>
+          刷新
+        </Button>
+      }
     >
       <ErrorNote message={error} />
-      <Table
+      <DataTable
         columns={[
           { key: "id", label: "report_id", render: (r) => <Mono>{r.id}</Mono> },
           { key: "run", label: "eval_run_id", render: (r) => <Mono>{r.eval_run_id}</Mono> },
@@ -1027,9 +984,17 @@ function ReportsPage() {
             key: "ops",
             label: "",
             render: (r) => (
-              <Btn className="btn-sm" onClick={() => void get(`/api/reports/${r.id}/payload`).then(setPayload).catch((err) => setPayload({ error: String(err) }))}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void get(`/api/reports/${r.id}/payload`)
+                    .then(setPayload)
+                    .catch((err: unknown) => setPayload({ error: String(err) }))
+                }
+              >
                 payload
-              </Btn>
+              </Button>
             ),
           },
         ]}
@@ -1040,7 +1005,7 @@ function ReportsPage() {
           <JsonBlock value={payload} />
         </Modal>
       )}
-    </Page>
+    </PageContainer>
   );
 }
 
@@ -1063,37 +1028,45 @@ function LineagePage() {
   };
 
   return (
-    <Page
-      eyebrow="FACTORY · 数据工厂"
-      title="血缘"
+    <PageContainer
       desc="按 run / 数据集版本 / 策略追溯：输入来源 → 中间产物 → 发布版本。"
-      actions={
-        <>
-          <Field label="维度" value={mode} onChange={(v) => setMode(v as typeof mode)} kind="select" options={["run_id", "dataset_id", "strategy_id"]} />
-          <Field label="id" value={value} onChange={setValue} mono placeholder="run_xxx / ds_xxx@1 / st_xxx" />
-          <Btn tone="primary" onClick={() => void query()}>
-            查询
-          </Btn>
-        </>
-      }
     >
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Field
+          label="维度"
+          value={mode}
+          onChange={(v) => setMode(v as typeof mode)}
+          kind="select"
+          options={["run_id", "dataset_id", "strategy_id"]}
+        />
+        <Field label="id" value={value} onChange={setValue} mono placeholder="run_xxx / ds_xxx@1 / st_xxx" />
+        <Button onClick={() => void query()}>查询</Button>
+      </div>
       <ErrorNote message={error} />
       {result !== null && <JsonBlock value={result} />}
-    </Page>
+    </PageContainer>
   );
 }
 
-export const factoryPages = [
-  { key: "overview", label: "总览", component: OverviewPage },
+export const factoryOverviewPage = {
+  key: "overview",
+  label: "总览",
+  component: FactoryOverviewPage,
+};
+
+export const factoryStrategyPages = [
   { key: "capabilities", label: "能力域", component: CapabilitiesPage },
   { key: "strategies", label: "策略", component: StrategiesPage },
   { key: "datasets", label: "数据集", component: DatasetsPage },
   { key: "workflows", label: "工作流", component: WorkflowsPage },
   { key: "runs", label: "运行", component: RunsPage },
   { key: "stages", label: "阶段", component: StagesPage },
-  { key: "models", label: "模型", component: ModelsPage },
-  { key: "eval-sets", label: "评测集", component: EvalSetsPage },
-  { key: "eval-runs", label: "评测", component: EvalRunsPage },
-  { key: "reports", label: "报告", component: ReportsPage },
   { key: "lineage", label: "血缘", component: LineagePage },
+];
+
+export const factoryEvalPages = [
+  { key: "models", label: "模型注册", component: ModelsPage },
+  { key: "eval-sets", label: "评测集", component: EvalSetsPage },
+  { key: "eval-runs", label: "评测运行", component: EvalRunsPage },
+  { key: "reports", label: "评测报告", component: ReportsPage },
 ];

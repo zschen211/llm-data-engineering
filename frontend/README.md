@@ -8,9 +8,14 @@
 
 ## 技术栈
 
-vite + react 18 + typescript（严格模式），无 UI 框架依赖；设计为「工程蓝图」
+vite + react 18 + typescript（严格模式）+ **Tailwind CSS v4 + shadcn/ui**
+（组件统一收口在 `src/components/ui/`，主题 token 在 `src/index.css` 的 CSS
+变量里；`src/widgets.tsx` 是 shadcn 之上的共享页面辅助）。设计为「工程蓝图」
 主题（IBM Plex Mono 承载全部数据/ID/状态，蓝色发丝线，顶部四层状态带为
 唯一 signature 元素）。
+
+新增 shadcn 组件：`npx shadcn add <name>`（registry 写入 `src/components/ui/`，
+同步更新 `components.json` 的依赖）。
 
 ## 本地开发
 
@@ -23,7 +28,7 @@ vite 按路径前缀代理到两个后端（见 `vite.config.ts`）：
 
 | 前缀 | 目标 |
 | --- | --- |
-| `/api/{assets,sources,snapshots,sync,downloads,cluster,info,backup}` | `http://localhost:8000`（asset） |
+| `/api/{assets,asset-datasets,sources,snapshots,sync,downloads,cluster,info,backup}` | `http://localhost:8000`（asset） |
 | 其余 `/api/*` | `http://localhost:8001`（data-factory） |
 
 两个后端需先启动：`asset/scripts/serve.sh --port 8000` 与
@@ -51,11 +56,13 @@ npm run typecheck    # tsc -b（严格模式）
 ```
 src/
 ├── api.ts               # 单源 HTTP 客户端（/api + 错误映射）
-├── widgets.tsx          # useFetch/usePoll、Table、Modal、Field、Status 等
+├── widgets.tsx          # useFetch/usePoll、Table、Field、Modal、Status 等（shadcn 之上）
 ├── LayeredStrip.tsx     # signature：四层状态带（INFRA/ASSET/FACTORY/CONSOLE）
-├── App.tsx              # hash 路由 + 侧边导航 + 布局
+├── App.tsx              # hash 路由 + 三级侧边导航（数据资产/数据工厂/基础设施）+ 布局
+├── components/ui/       # shadcn/ui 组件（button/table/dialog/select/tabs/...）
+├── lib/utils.ts         # cn()（clsx + tailwind-merge）
 └── pages/
-    ├── assets.tsx       # 资产层页面：总览/数据源/资产/快照/同步/下载/集群
-    └── factory.tsx      # 工厂页面：总览/能力域/策略/数据集/工作流/运行/阶段/
-                         #   模型/评测集/评测/报告/血缘
+    ├── assets.tsx       # 数据资产：总览/数据源/数据集（含快照页签）/同步·下载记录
+    ├── factory.tsx      # 数据工厂：总览 + 数据策略/模型评测两组页面
+    └── infra.tsx        # 基础设施：集群状态 + 中间件控制台入口
 ```

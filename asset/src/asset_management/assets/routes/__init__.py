@@ -21,6 +21,7 @@ from ..services.cluster import cluster_manager
 from ..services.obs import MetricsMiddleware, observability
 from .assets import make_router as assets_router
 from .cluster import make_router as cluster_router
+from .datasets import make_router as datasets_router
 from .downloads import make_router as downloads_router
 from .info import make_router as info_router
 from .snapshots import make_router as snapshots_router
@@ -77,6 +78,7 @@ def create_app(store: AssetStore) -> FastAPI:
         sources_router(store),
         sync_router(store),
         assets_router(store),
+        datasets_router(store),
         downloads_router(store),
         snapshots_router(store),
         cluster_router(store),

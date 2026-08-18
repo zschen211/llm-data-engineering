@@ -20,16 +20,19 @@ infra/
 
 ## 快速开始
 
+日常开发直接用根目录编排器 `./scripts/dev.sh up`（infra + Ray + 后端 + 前端
+一条命令）。手动逐层启动：
+
 ```bash
 cp .env.example .env          # 按需修改（RustFS 凭据 / Grafana 密码）
 
 ./scripts/up.sh               # 中间件：RustFS + Prometheus + Grafana + node-exporter
-./scripts/ray-start.sh        # Ray 独立集群（GCS:6379 / dashboard:8265 / metrics:8080）
-export RAY_ADDRESS=127.0.0.1:6379
+./scripts/ray-start.sh        # Ray 独立集群（GCS:26379 / dashboard:8265 / metrics:8080）
+export RAY_ADDRESS=127.0.0.1:26379
 
 # 然后在各自目录启动业务服务：
 #   asset: scripts/serve.sh --port 8000
-#   data-factory:     scripts/serve.sh --port 8001
+#   data_factory: scripts/serve.sh --port 8001
 
 ./scripts/status.sh           # compose + ray 状态
 ./scripts/obs_check.sh        # 可观测性冒烟：targets + 两服务 /metrics
@@ -45,7 +48,7 @@ export RAY_ADDRESS=127.0.0.1:6379
 | 9090 | Prometheus |
 | 3000 | Grafana（admin / $GRAFANA_ADMIN_PASSWORD） |
 | 9100 | node-exporter |
-| 6379/8265/8080 | Ray GCS / Dashboard / metrics agent |
+| 26379/8265/8080 | Ray GCS / Dashboard / metrics agent |
 | 8000/8001 | asset / data-factory HTTP |
 
 ## 约定

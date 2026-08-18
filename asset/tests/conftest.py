@@ -8,6 +8,11 @@ import ray
 
 TESTS_DIR = Path(__file__).parent
 
+# Tests never attach the shared Ray cluster (infra contract): Ray's
+# address=None auto-detects a running cluster via /tmp/ray/ray_current_cluster,
+# so scrub RAY_ADDRESS and use address="local" (forces a fresh local cluster).
+os.environ.pop("RAY_ADDRESS", None)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _test_log_dir(tmp_path_factory):
@@ -24,11 +29,13 @@ def ray_runtime():
     monkeypatching; fake hubs are injected via ``hub=`` (cloudpickle ships the
     class definition to the workers, which need the tests dir on PYTHONPATH).
     The working dir is excluded from the runtime-env package (code is
-    pip-installed).
+    pip-installed). ``_temp_dir`` forces a private cluster even when the
+    shared one is running.
     """
     cpus = min(4, max(1, os.cpu_count() or 2))
     ray.init(
         num_cpus=cpus,
+        address="local",
         ignore_reinit_error=True,
         log_to_driver=False,
         runtime_env={

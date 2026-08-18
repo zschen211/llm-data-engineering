@@ -87,6 +87,20 @@ class ClusterManager:
             return max(1, int(override))
         return max(1, os.cpu_count() or 2)
 
+    @staticmethod
+    def _find_free_port(preferred: int) -> int:
+        """A free TCP port, preferring ``preferred`` (metrics agent port)."""
+        import socket
+
+        with socket.socket() as sock:
+            for port in (preferred, 0):
+                try:
+                    sock.bind(("127.0.0.1", port))
+                    return sock.getsockname()[1]
+                except OSError:
+                    continue
+        return preferred
+
     def ensure_started(self) -> None:
         """Start the cluster if it is not up yet; cheap no-op otherwise."""
         with self._lock:
@@ -100,16 +114,34 @@ class ClusterManager:
                     "cluster (dev only); start infra/scripts/ray-start.sh and "
                     "export RAY_ADDRESS to use the shared cluster"
                 )
+                if self._port_taken(self._metrics_port):
+                    logger.warning(
+                        "metrics port %s is taken (shared cluster?) — "
+                        "picking a free port for the embedded cluster",
+                        self._metrics_port,
+                    )
+                    self._metrics_port = self._find_free_port(self._metrics_port)
             context = ray.init(
-                num_cpus=self._num_cpus,
-                address=self._address or None,
+                address=self._address or "local",
                 ignore_reinit_error=True,
                 runtime_env={"excludes": ["**"]},
                 _metrics_export_port=self._metrics_port,
+                **({} if self._address else {"num_cpus": self._num_cpus}),
             )
             self._dashboard_url = context.dashboard_url or ""
             self._gcs_address = context.address_info.get("gcs_address", "") or ""
             self._logs_dir = self._read_session_logs_dir()
+
+    @staticmethod
+    def _port_taken(port: int) -> bool:
+        import socket
+
+        with socket.socket() as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                return True
+            return False
 
     @staticmethod
     def _read_session_logs_dir() -> str:

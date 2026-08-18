@@ -34,17 +34,35 @@ infra/（RustFS · Ray · Prometheus · Grafana · nginx 网关；契约见 infr
 
 ## 快速开始
 
+**一条命令拉起整个开发栈**（中间件 compose → Ray 集群 → 两个后端 → 前端）：
+
+```bash
+./scripts/dev.sh up          # 幂等：重复执行只补齐缺失的部分
+# 或 make dev
+
+./scripts/dev.sh status      # 各服务状态 + 健康探针
+./scripts/dev.sh logs        # 聚合日志（.run/logs/），可跟服务名看单个
+./scripts/dev.sh down        # 全部停止（应用 → Ray → compose）
+
+make help                    # 查看全部目标
+```
+
+首次使用前各子项目需各自 `uv sync --extra dev`（asset / data_factory），
+前端 `cd frontend && npm install`；服务日志与 PID 文件在 `.run/`（已 gitignore）。
+
+逐层手动启动（等价于 `dev.sh up` 的内部步骤）：
+
 ```bash
 # 1. 中间件（RustFS / Prometheus / Grafana / Ray 集群）
 cd infra && cp .env.example .env && ./scripts/up.sh && ./scripts/ray-start.sh
-export RAY_ADDRESS=127.0.0.1:6379
+export RAY_ADDRESS=127.0.0.1:26379
 
 # 2. 平台与业务服务（各自目录）
-cd asset        && uv sync --extra dev && ./scripts/serve.sh --port 8000
-cd data_factory && uv sync --extra dev && ./scripts/serve.sh --port 8001
+cd asset        && ./scripts/serve.sh --port 8000
+cd data_factory && ./scripts/serve.sh --port 8001
 
 # 3. 前端
-cd frontend && npm install && npm run dev   # http://localhost:5173
+cd frontend && npm run dev   # http://localhost:5173
 
 # 4. 可观测性冒烟
 cd infra && ./scripts/obs_check.sh

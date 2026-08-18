@@ -509,6 +509,42 @@ class Database(SyncStateMixin):
             values,
         ).fetchone()[0]
 
+    def dataset_stats(self) -> dict[str, dict]:
+        """Per-source dataset aggregation for the management console.
+
+        Each asset dataset is the set of assets synced from one source.
+        Returns a dict keyed by source id with status counts, ready bytes,
+        distinct tags and the latest sync run of that source.
+        """
+        stats: dict[str, dict] = {}
+        for row in self._conn.execute(
+            "SELECT source_id, status, COUNT(*) AS n FROM assets GROUP BY source_id, status"
+        ):
+            bucket = stats.setdefault(row["source_id"], {})
+            counts = bucket.setdefault("status_counts", {})
+            counts[row["status"]] = row["n"]
+        for row in self._conn.execute(
+            "SELECT source_id, SUM(size) AS total FROM assets "
+            "WHERE status = 'ready' GROUP BY source_id"
+        ):
+            stats.setdefault(row["source_id"], {})["ready_bytes"] = row["total"] or 0
+        for row in self._conn.execute(
+            "SELECT DISTINCT a.source_id, t.tag_group, t.name FROM asset_tags at "
+            "JOIN tags t ON t.id = at.tag_id JOIN assets a ON a.id = at.asset_id "
+            "ORDER BY t.tag_group, t.name"
+        ):
+            bucket = stats.setdefault(row["source_id"], {})
+            bucket.setdefault("tags", []).append(f"{row['tag_group']}={row['name']}")
+        for row in self._conn.execute(
+            "SELECT id, source_id, status, current_stage, progress, "
+            "created_at, updated_at FROM sync_runs "
+            "ORDER BY created_at DESC, id DESC"
+        ):
+            bucket = stats.setdefault(row["source_id"], {})
+            if "latest_run" not in bucket:
+                bucket["latest_run"] = dict(row)
+        return stats
+
     @staticmethod
     def _asset_filters(
         asset_type: str | None,

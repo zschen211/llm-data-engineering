@@ -23,7 +23,7 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | 9090 | Prometheus | 抓取全部 `/metrics` 目标 |
 | 3000 | Grafana | dashboard 由 provisioning 自动加载 |
 | 9100 | node-exporter | 宿主机指标 |
-| 6379 | Ray GCS | 集群连接地址（`ray://` 或 `ip:6379`） |
+| 26379 | Ray GCS | 集群连接地址（`ray://` 或 `ip:26379`，默认被系统 redis 占用时用 26379） |
 | 8265 | Ray Dashboard | 集群状态/任务/日志 |
 | 8080 | Ray metrics agent | Prometheus 抓取（`ASSET_RAY_METRICS_PORT` 固定） |
 | 8000 | asset HTTP | FastAPI 管理 API |
@@ -40,6 +40,7 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | `RUSTFS_SECRET_KEY` | `rustfsadmin` | |
 | `RUSTFS_BUCKET` | 服务各自持有 | 见下 |
 | `RAY_ADDRESS` | 空（→ 服务内嵌集群兜底） | 独立 Ray 集群地址，`ray start` 产出 |
+| `RAY_GCS_PORT` | `26379` | Ray head GCS 端口（避开系统 redis 的 6379 与 worker 端口段） |
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | compose 注入 |
 
 ### asset（前缀 `ASSET_`）
@@ -80,24 +81,28 @@ RustFS bucket 默认：**`dfac-datasets`**。Ray：共享 `RAY_ADDRESS`（无独
 ## API 路径契约
 
 - asset 服务自身挂载 `/api/*`：`/api/info` `/api/sources`
-  `/api/assets` `/api/snapshots` `/api/sync` `/api/downloads` `/api/cluster`
-  `/api/backup`，另有 `/metrics`。
+  `/api/assets` `/api/asset-datasets` `/api/snapshots` `/api/sync`
+  `/api/downloads` `/api/cluster` `/api/backup`，另有 `/metrics`。
+  `/api/asset-datasets` 是按数据源聚合的数据集列表（资产层「数据集」）；
+  路径避开 `/api/datasets`（data-factory 的 run 输入数据集）。
 - data-factory 服务自身挂载 `/api/*`：`/api/capabilities` `/api/strategies`
   `/api/datasets` `/api/workflows` `/api/runs` `/api/stages` `/api/models`
   `/api/eval-sets` `/api/eval-runs` `/api/reports` `/api/factory-info`，
   另有 `/metrics`。
 - 前端单源访问：dev 用 vite proxy 按路径前缀分流；生产由 infra nginx 网关
-  分流（`/api/{sources,assets,snapshots,sync,downloads,cluster,info,backup}`
+  分流（`/api/{sources,assets,asset-datasets,snapshots,sync,downloads,cluster,info,backup}`
   → asset:8000，其余 `/api/*` → data-factory:8001）。
 
 ## Ray 集群
 
-- 独立集群：`infra/scripts/ray-start.sh`（head：GCS 6379 / dashboard 8265 /
-  metrics 8080）；GPU worker 二期接入时 `ray start --address=127.0.0.1:6379 --num-gpus=N`。
-- 服务连接：读 `RAY_ADDRESS`；**未配置时**允许内嵌本地集群兜底（dev/测试），
-  并打印醒目 warning。
-- 测试约定：pytest 用 session 级本地内嵌集群（`ray.init(num_cpus=...)`），
-  绝不连接共享集群，互不干扰。
+- 独立集群：`infra/scripts/ray-start.sh`（head：GCS `$RAY_GCS_PORT` 默认 26379 /
+  dashboard 8265 / metrics `$ASSET_RAY_METRICS_PORT` 默认 8080）；GPU worker
+  二期接入时 `ray start --address=127.0.0.1:26379 --num-gpus=N`。GCS 端口默认
+  避开 6379（本机常被系统 redis 占用）与 Ray worker 端口段 10002–19999。
+- 服务连接：读 `RAY_ADDRESS`；**未配置时**内嵌本地集群兜底（dev/测试，醒目
+  warning），且内嵌集群绝不静默 attach 已有集群（`address="local"`）。
+- 测试约定：pytest 用 session 级本地内嵌集群
+  （`ray.init(address="local", num_cpus=...)`），绝不连接共享集群，互不干扰。
 - `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` 由两个包的 `__init__.py` 强制设置：
   uv-run 的 runtime-env 会把 path 依赖整个打包进 worker，OOM 且无法重建
   （两个包都有此 hack，属已知必要项）。

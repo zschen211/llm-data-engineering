@@ -1,3 +1,5 @@
+import path from "node:path";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -6,6 +8,7 @@ import { defineConfig } from "vite";
 // nginx gateway in infra/nginx (see infra/docs/contract.md).
 const ASSET_API_PATHS = [
   "/api/assets",
+  "/api/asset-datasets",
   "/api/sources",
   "/api/snapshots",
   "/api/sync",
@@ -16,7 +19,12 @@ const ASSET_API_PATHS = [
 ];
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
   server: {
     port: 5173,
     proxy: {

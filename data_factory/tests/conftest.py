@@ -14,6 +14,9 @@ from pathlib import Path
 # package sets the same flag at import (CLI drivers); tests set it here so it
 # is effective even when `ray` is imported before `data_factory`.
 os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+# Tests never attach the shared Ray cluster (infra contract): Ray auto-detects
+# a running cluster when address=None, so scrub RAY_ADDRESS here.
+os.environ.pop("RAY_ADDRESS", None)
 
 import pytest
 import ray
@@ -23,8 +26,17 @@ from data_factory.storage import LocalStorageBackend
 
 @pytest.fixture(scope="session", autouse=True)
 def ray_runtime():
-    """Session-scoped local Ray cluster (pipeline executor runs on it)."""
-    ray.init(num_cpus=2, ignore_reinit_error=True, log_to_driver=False)
+    """Session-scoped local Ray cluster (pipeline executor runs on it).
+
+    address="local" forces a fresh private cluster even when the shared one
+    is running (see infra/docs/contract.md test convention).
+    """
+    ray.init(
+        num_cpus=2,
+        address="local",
+        ignore_reinit_error=True,
+        log_to_driver=False,
+    )
     yield ray
     ray.shutdown()
 
