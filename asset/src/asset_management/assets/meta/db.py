@@ -751,8 +751,16 @@ class Database(SyncStateMixin):
         return download_id
 
     def list_downloads(self, limit: int = 100) -> list[dict]:
+        """Download ledger rows joined with the asset for the console
+        (asset_name / sha256 / size); deleted assets keep their record
+        (LEFT JOIN) with NULL asset columns."""
         rows = self._conn.execute(
-            "SELECT * FROM downloads ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT d.id, d.asset_id, a.name AS asset_name, a.sha256,"
+            " a.size AS bytes_downloaded, d.downloader, d.status, d.error,"
+            " d.attempts, d.started_at, d.finished_at"
+            " FROM downloads d LEFT JOIN assets a ON a.id = d.asset_id"
+            " ORDER BY d.id DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
 

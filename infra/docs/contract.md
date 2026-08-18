@@ -23,6 +23,7 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | 9090 | Prometheus | 抓取全部 `/metrics` 目标 |
 | 3000 | Grafana | dashboard 由 provisioning 自动加载 |
 | 9100 | node-exporter | 宿主机指标 |
+| 9256 | process-exporter | 主机进程资源（按进程名分组的 CPU/内存/线程/FD） |
 | 26379 | Ray GCS | 集群连接地址（`ray://` 或 `ip:26379`，默认被系统 redis 占用时用 26379） |
 | 8265 | Ray Dashboard | 集群状态/任务/日志 |
 | 8080 | Ray metrics agent | Prometheus 抓取（`ASSET_RAY_METRICS_PORT` 固定） |
@@ -39,8 +40,10 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | `RUSTFS_ACCESS_KEY` | `rustfsadmin` | |
 | `RUSTFS_SECRET_KEY` | `rustfsadmin` | |
 | `RUSTFS_BUCKET` | 服务各自持有 | 见下 |
-| `RAY_ADDRESS` | 空（→ 服务内嵌集群兜底） | 独立 Ray 集群地址，`ray start` 产出 |
+| `RAY_ADDRESS` | 必填（无兜底） | 独立 Ray 集群地址，`ray start` 产出；服务未配置即报错 |
 | `RAY_GCS_PORT` | `26379` | Ray head GCS 端口（避开系统 redis 的 6379 与 worker 端口段） |
+| `RAY_NUM_CPUS` | `4` | ray-start.sh 集群 CPU 数（Ray 按 CPU 预启动同等数量空闲 worker） |
+| `RAY_OBJECT_STORE_MEMORY` | `2147483648` (2GB) | ray-start.sh 对象存储共享内存（每个 worker 会 mmap 它） |
 | `GRAFANA_ADMIN_PASSWORD` | `admin` | compose 注入 |
 
 ### asset（前缀 `ASSET_`）
@@ -53,7 +56,7 @@ infra/             中间件 + 运维（docker compose / 脚本 / 配置），�
 | `ASSET_LOG_MAX_BYTES` / `ASSET_LOG_BACKUPS` | 50MB / 5 | 日志轮转 |
 | `ASSET_OBS_DIR` / `ASSET_OBS_INTERVAL` | 同日志目录 / 5s | 事件流 |
 | `ASSET_OBS_MAX_BYTES` / `ASSET_OBS_BACKUPS` | 50MB / 5 | 事件流轮转 |
-| `ASSET_RAY_NUM_CPUS` | 全部核心 | 仅内嵌兜底集群使用 |
+| `ASSET_RAY_NUM_CPUS` | 全部核心 | 仅显式 `address="local"` 本地集群使用（测试） |
 | `ASSET_RAY_METRICS_PORT` | 8080 | Ray metrics agent 固定端口 |
 
 RustFS bucket 默认：**`asset-assets`**。
@@ -75,7 +78,8 @@ RustFS bucket 默认：**`dfac-datasets`**。Ray：共享 `RAY_ADDRESS`（无独
   sync 系列），避免与 Ray metrics agent 的 `ray_*` 冲突。
 - Prometheus scrape 目标（`infra/prometheus/prometheus.yml`）：
   `asset:8000`、`data-factory:8001`、`ray-metrics:8080`、
-  `node-exporter:9100`。
+  `node-exporter:9100`、`process-exporter:9256`（进程名分组配置见
+  `infra/process-exporter/process-exporter.yml`，指标 `namedprocess_namegroup_*`）。
 - 本地 dev：Ray 集群跑在宿主机 netns，Prometheus 容器必须 host network。
 
 ## API 路径契约
@@ -96,12 +100,15 @@ RustFS bucket 默认：**`dfac-datasets`**。Ray：共享 `RAY_ADDRESS`（无独
 ## Ray 集群
 
 - 独立集群：`infra/scripts/ray-start.sh`（head：GCS `$RAY_GCS_PORT` 默认 26379 /
-  dashboard 8265 / metrics `$ASSET_RAY_METRICS_PORT` 默认 8080）；GPU worker
-  二期接入时 `ray start --address=127.0.0.1:26379 --num-gpus=N`。GCS 端口默认
-  避开 6379（本机常被系统 redis 占用）与 Ray worker 端口段 10002–19999。
-- 服务连接：读 `RAY_ADDRESS`；**未配置时**内嵌本地集群兜底（dev/测试，醒目
-  warning），且内嵌集群绝不静默 attach 已有集群（`address="local"`）。
-- 测试约定：pytest 用 session 级本地内嵌集群
+  dashboard 8265 / metrics `$ASSET_RAY_METRICS_PORT` 默认 8080 / CPU
+  `$RAY_NUM_CPUS` 默认 4 / 对象存储 `$RAY_OBJECT_STORE_MEMORY` 默认 2GB）；
+  GPU worker 二期接入时 `ray start --address=127.0.0.1:26379 --num-gpus=N`。
+  GCS 端口默认避开 6379（本机常被系统 redis 占用）与 Ray worker 端口段
+  10002–19999。Ray 按 CPU 数预启动空闲 worker（每个都会 mmap 对象存储
+  共享内存），因此 CPU 数即空闲 worker 数，应保持与业务并发匹配。
+- 服务连接：读 `RAY_ADDRESS`（必填）；**未配置时直接报错，无内嵌兜底**
+  （一进程一集群；`scripts/dev.sh` 对全部子命令统一 export）。
+- 测试约定：pytest 用 session 级私有本地集群
   （`ray.init(address="local", num_cpus=...)`），绝不连接共享集群，互不干扰。
 - `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` 由两个包的 `__init__.py` 强制设置：
   uv-run 的 runtime-env 会把 path 依赖整个打包进 worker，OOM 且无法重建

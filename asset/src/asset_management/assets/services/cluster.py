@@ -1,27 +1,25 @@
-"""Single owner of the process-wide Ray cluster: lifecycle and status.
+"""Single owner of the process-wide Ray cluster: attach and status.
 
 Every ``ray.init``/``ray.shutdown`` call goes through the module-level
-``cluster_manager`` singleton, so the cluster is started exactly once per
+``cluster_manager`` singleton, so the cluster is attached exactly once per
 process and reused by every sync (zero per-run init overhead).
 
-Ownership semantics: ``ensure_started`` records whether the manager started
+Ownership semantics: ``ensure_started`` records whether the manager attached
 the cluster itself. A cluster initialized by someone else (e.g. the pytest
-``ray_runtime`` fixture) is reused read-only and never shut down by
-``stop``.
+``ray_runtime`` fixture) is reused read-only and never shut down by ``stop``.
 
-Configuration (read once at construction):
-  - ``ASSET_RAY_NUM_CPUS``: CPU resources for the local cluster
-    (default: all cores; only used by the embedded fallback);
-  - ``RAY_ADDRESS``: the shared infra contract variable (see
-    ``infra/docs/contract.md``): attach to the standalone Ray cluster
-    started by ``infra/scripts/ray-start.sh`` instead of starting a local
-    one (the web app then manages nothing, only monitors). When unset the
-    manager starts an embedded local cluster as a dev fallback and logs a
-    loud warning;
-  - ``ASSET_RAY_METRICS_PORT``: fixed Prometheus metrics port for the local
-    cluster's metrics agent (default 8080). Ray serves its native metrics
-    from this agent, not from the dashboard port, so Prometheus can scrape
-    a stable target;
+Configuration (read at call time so env changes are honored):
+  - ``RAY_ADDRESS``: required infra-contract variable (see
+    ``infra/docs/contract.md``); the manager attaches to the standalone Ray
+    cluster started by ``infra/scripts/ray-start.sh`` and raises a clear
+    error when it is unset (the embedded local fallback was removed — one
+    process, one cluster);
+  - ``ASSET_RAY_NUM_CPUS``: CPU resources for an explicit ``address="local"``
+    cluster (tests only; the app never starts clusters itself);
+  - ``ASSET_RAY_METRICS_PORT``: fixed Prometheus metrics port of the shared
+    cluster's metrics agent (default 8080, matches ``ray-start.sh``). Ray
+    serves its native metrics from this agent, not from the dashboard port,
+    so Prometheus can scrape a stable target;
   - ``RAY_ENABLE_UV_RUN_RUNTIME_ENV``: forced to 0 by the package import
     (see ``asset_management/__init__.py``), before ``ray`` is imported, so the
     uv-run hook never injects ``working_dir=<cwd>`` — the dashboard's
@@ -59,15 +57,13 @@ RAY_LOG_TO_DRIVER_ENV = "RAY_LOG_TO_DRIVER"
 
 
 class ClusterManager:
-    """Idempotent, thread-safe wrapper around the Ray cluster lifecycle."""
+    """Idempotent, thread-safe wrapper around Ray cluster attachment."""
 
     def __init__(self, num_cpus: int | None = None, address: str | None = None):
         self._lock = Lock()
         self._owned = False
         self._num_cpus = num_cpus if num_cpus is not None else self._default_num_cpus()
-        self._address = (
-            address if address is not None else os.environ.get(ADDRESS_ENV, "")
-        )
+        self._address = address if address is not None else ""
         self._metrics_port = self._env_int(METRICS_PORT_ENV, METRICS_PORT_DEFAULT)
         self._dashboard_url = ""
         self._gcs_address = ""
@@ -87,61 +83,37 @@ class ClusterManager:
             return max(1, int(override))
         return max(1, os.cpu_count() or 2)
 
-    @staticmethod
-    def _find_free_port(preferred: int) -> int:
-        """A free TCP port, preferring ``preferred`` (metrics agent port)."""
-        import socket
-
-        with socket.socket() as sock:
-            for port in (preferred, 0):
-                try:
-                    sock.bind(("127.0.0.1", port))
-                    return sock.getsockname()[1]
-                except OSError:
-                    continue
-        return preferred
-
     def ensure_started(self) -> None:
-        """Start the cluster if it is not up yet; cheap no-op otherwise."""
+        """Attach to the shared cluster if it is not up yet; cheap no-op
+        otherwise. Raises ValueError when ``RAY_ADDRESS`` is unset."""
         with self._lock:
             if ray.is_initialized():
                 return
+            # Resolved per call so a later env change (tests, restart) is
+            # honored even though the default binds at construction.
+            address = self._address or os.environ.get(ADDRESS_ENV, "")
+            if not address:
+                raise ValueError(
+                    "RAY_ADDRESS is not set — the asset service requires the "
+                    "shared Ray cluster (infra/scripts/ray-start.sh + export "
+                    "RAY_ADDRESS); the embedded local fallback was removed"
+                )
             self._owned = True
             os.environ.setdefault(RAY_LOG_TO_DRIVER_ENV, "0")
-            if not self._address:
-                logger.warning(
-                    "no RAY_ADDRESS set — starting an EMBEDDED local Ray "
-                    "cluster (dev only); start infra/scripts/ray-start.sh and "
-                    "export RAY_ADDRESS to use the shared cluster"
-                )
-                if self._port_taken(self._metrics_port):
-                    logger.warning(
-                        "metrics port %s is taken (shared cluster?) — "
-                        "picking a free port for the embedded cluster",
-                        self._metrics_port,
-                    )
-                    self._metrics_port = self._find_free_port(self._metrics_port)
+            local = address == "local"
             context = ray.init(
-                address=self._address or "local",
+                address=address,
                 ignore_reinit_error=True,
                 runtime_env={"excludes": ["**"]},
-                _metrics_export_port=self._metrics_port,
-                **({} if self._address else {"num_cpus": self._num_cpus}),
+                # Pinned metrics port only makes sense for the app's attach
+                # path (it matches the shared cluster's agent); an explicit
+                # test cluster ("local") picks a free port instead.
+                **({"_metrics_export_port": self._metrics_port} if not local else {}),
+                **({"num_cpus": self._num_cpus} if local else {}),
             )
             self._dashboard_url = context.dashboard_url or ""
             self._gcs_address = context.address_info.get("gcs_address", "") or ""
             self._logs_dir = self._read_session_logs_dir()
-
-    @staticmethod
-    def _port_taken(port: int) -> bool:
-        import socket
-
-        with socket.socket() as sock:
-            try:
-                sock.bind(("127.0.0.1", port))
-            except OSError:
-                return True
-            return False
 
     @staticmethod
     def _read_session_logs_dir() -> str:

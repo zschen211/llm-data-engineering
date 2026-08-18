@@ -16,15 +16,14 @@ import {
   DataTable,
   ErrorNote,
   Field,
-  FieldItem,
   fmtBytes,
   fmtTime,
   FormModal,
+  InfoCard,
   JsonBlock,
   Mono,
   PageContainer,
   PageSection,
-  StatCard,
   Status,
   useFetch,
   type Column,
@@ -72,29 +71,19 @@ function AssetOverviewPage() {
     >
       <ErrorNote message={error} />
       {data && (
-        <>
-          <div className="mb-5 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-            <StatCard label="asset_count" value={data.asset_count} />
-            <StatCard label="ready" value={data.ready_count} />
-            <StatCard label="failed" value={data.failed_count} />
-            <StatCard label="sources" value={data.source_count} />
-            <StatCard label="snapshots" value={data.snapshot_count} />
-          </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
-            <FieldItem label="backend">
-              <Mono>{data.backend}</Mono>
-            </FieldItem>
-            <FieldItem label="bucket">
-              <Mono>{data.bucket ?? "-"}</Mono>
-            </FieldItem>
-            <FieldItem label="data_dir">
-              <Mono>{data.data_dir}</Mono>
-            </FieldItem>
-            <FieldItem label="db_path">
-              <Mono>{data.db_path}</Mono>
-            </FieldItem>
-          </div>
-        </>
+        <InfoCard
+          items={[
+            ["asset_count", data.asset_count],
+            ["ready", data.ready_count],
+            ["failed", data.failed_count],
+            ["sources", data.source_count],
+            ["snapshots", data.snapshot_count],
+            ["backend", <Mono key="b">{data.backend}</Mono>],
+            ["bucket", <Mono key="bk">{data.bucket ?? "-"}</Mono>],
+            ["data_dir", <Mono key="dd">{data.data_dir}</Mono>],
+            ["db_path", <Mono key="db">{data.db_path}</Mono>],
+          ]}
+        />
       )}
     </PageContainer>
   );
@@ -109,6 +98,12 @@ interface Source {
   url: string;
   license: string;
   description: string;
+  params: {
+    repo_id?: string;
+    process?: string;
+    attempts?: number;
+    workers?: number;
+  };
   running_run_id: string | null;
   resumable_run_id: string | null;
 }
@@ -137,12 +132,12 @@ function SourcesPage() {
   const columns: Column<Source>[] = [
     { key: "name", label: "name" },
     { key: "kind", label: "kind", render: (s) => <Mono>{s.kind}</Mono> },
-    { key: "url", label: "url", render: (s) => <Mono>{s.url || "-"}</Mono> },
+    { key: "url", label: "url", render: (s) => <Mono>{s.params?.repo_id || s.url || "-"}</Mono> },
     { key: "license", label: "license", render: (s) => s.license || "-" },
     { key: "description", label: "description" },
     {
       key: "run",
-      label: "sync run",
+      label: "同步运行",
       render: (s) => (
         <>
           {s.running_run_id && <Status status="running" />}
@@ -162,14 +157,14 @@ function SourcesPage() {
             variant="outline"
             onClick={() => void runAction(() => post(`/api/sources/${s.id}/sync`), "已触发同步")}
           >
-            sync
+            同步
           </Button>
           <Button
             size="sm"
             variant="outline"
             onClick={() => void runAction(() => post(`/api/sources/${s.id}/reprocess`), "已触发重处理")}
           >
-            reprocess
+            重处理
           </Button>
           <Button size="sm" variant="outline" onClick={() => setEditing(s)}>
             编辑
@@ -217,26 +212,41 @@ function SourceModal({
   onClose: () => void;
   onSaved: (msg: string) => void;
 }) {
+  const existing = source?.params ?? {};
   const [name, setName] = useState(source?.name ?? "");
   const [kind, setKind] = useState(source?.kind ?? "huggingface");
   const [url, setUrl] = useState(source?.url ?? "");
   const [license, setLicense] = useState(source?.license ?? "");
   const [description, setDescription] = useState(source?.description ?? "");
-  const [paramsText, setParamsText] = useState(
-    source ? JSON.stringify((source as unknown as { params?: unknown }).params ?? {}, null, 2) : "{}",
-  );
+  const [repoId, setRepoId] = useState(existing.repo_id ?? "");
+  const [process, setProcess] = useState(existing.process ?? "file");
+  const [attempts, setAttempts] = useState(String(existing.attempts ?? 3));
+  const [workers, setWorkers] = useState(String(existing.workers ?? 2));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
-    let params: unknown;
-    try {
-      params = JSON.parse(paramsText || "{}");
-    } catch {
-      setError("params 不是合法 JSON");
+    if (!name.trim()) {
+      setError("name 必填：数据源名称");
       return;
     }
-    const body = { name, kind, url, license, description, params };
+    let params: Source["params"];
+    if (kind === "huggingface") {
+      if (!repoId.trim()) {
+        setError("repo_id 必填：HuggingFace 仓库 id，如 lmms-lab-encoder/COCO-Caption");
+        return;
+      }
+      params = {
+        ...existing,
+        repo_id: repoId.trim(),
+        process,
+        attempts: Math.max(1, Math.min(10, Number(attempts) || 3)),
+        workers: Math.max(1, Math.min(32, Number(workers) || 2)),
+      };
+    } else {
+      params = existing;
+    }
+    const body = { name: name.trim(), kind, url, license, description, params };
     setSaving(true);
     setError("");
     try {
@@ -263,18 +273,70 @@ function SourceModal({
       error={error}
       confirmLabel="保存"
     >
-      <Field label="name" value={name} onChange={setName} mono />
-      <Field label="kind" value={kind} onChange={setKind} mono placeholder="huggingface" />
-      <Field label="url" value={url} onChange={setUrl} mono />
-      <Field label="license" value={license} onChange={setLicense} />
-      <Field label="description" value={description} onChange={setDescription} />
       <Field
-        label="params (json)"
-        value={paramsText}
-        onChange={setParamsText}
-        kind="textarea"
+        label="name"
+        value={name}
+        onChange={setName}
         mono
+        required
+        hint="数据源名称（唯一），如 coco-caption"
       />
+      <Field
+        label="kind"
+        value={kind}
+        onChange={setKind}
+        kind="select"
+        options={["huggingface", "local"]}
+        required
+        hint="huggingface=从 HF 仓库同步；local=本地目录导入"
+      />
+      {kind === "huggingface" ? (
+        <>
+          <Field
+            label="repo_id"
+            value={repoId}
+            onChange={setRepoId}
+            mono
+            required
+            placeholder="lmms-lab-encoder/COCO-Caption"
+            hint="HuggingFace 仓库 id（必填）"
+          />
+          <Field
+            label="process"
+            value={process}
+            onChange={setProcess}
+            kind="select"
+            options={["file", "parquet"]}
+            hint="file=原样入库；parquet=解包数据集内嵌图像"
+          />
+          <Field
+            label="attempts"
+            value={attempts}
+            onChange={setAttempts}
+            type="number"
+            mono
+            hint="下载失败重试次数（1–10，默认 3）"
+          />
+          <Field
+            label="workers"
+            value={workers}
+            onChange={setWorkers}
+            type="number"
+            mono
+            hint="Ray 同步并发数（1–32，默认 2）"
+          />
+        </>
+      ) : (
+        <Field
+          label="url"
+          value={url}
+          onChange={setUrl}
+          mono
+          hint="本地目录路径（必填），如 /data/images"
+        />
+      )}
+      <Field label="license" value={license} onChange={setLicense} hint="如 CC-BY-4.0，可留空" />
+      <Field label="description" value={description} onChange={setDescription} hint="可留空" />
     </FormModal>
   );
 }
@@ -324,7 +386,7 @@ function DatasetList() {
     { key: "bytes", label: "bytes", render: (d) => fmtBytes(d.ready_bytes) },
     {
       key: "sync",
-      label: "sync",
+      label: "同步",
       render: (d) =>
         d.latest_run ? (
           <>
@@ -630,6 +692,11 @@ interface SyncRun {
   status: string;
   started_at: string;
   finished_at: string | null;
+  progress: number;
+  total_files: number;
+  done_files: number;
+  failed_files: number;
+  current_stage: string;
 }
 
 interface SyncEvent {
@@ -640,31 +707,164 @@ interface SyncEvent {
   created_at: string;
 }
 
+interface SyncTask {
+  id: string;
+  name: string;
+  path_in_repo: string;
+  status: string;
+  bytes_downloaded: number;
+  total_bytes: number;
+  fraction: number | null;
+  attempts: number;
+  process_attempts: number;
+  error: string;
+}
+
+interface SyncTaskPage {
+  items: SyncTask[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+const TASK_PAGE_SIZE = 20;
+
 function SyncRunsTab() {
   const { data, error, reload } = useFetch<SyncRun[]>("/api/sync/runs?limit=50");
   const [selected, setSelected] = useState<SyncRun | null>(null);
   const [events, setEvents] = useState<SyncEvent[]>([]);
+  const [tasks, setTasks] = useState<SyncTaskPage | null>(null);
+  const [taskError, setTaskError] = useState("");
 
   const openRun = async (run: SyncRun) => {
     setSelected(run);
-    const evs = await get<SyncEvent[]>(`/api/sync/${run.id}/events?limit=500`);
-    setEvents(evs);
+    try {
+      const evs = await get<SyncEvent[]>(`/api/sync/${run.id}/events?limit=500`);
+      setEvents(evs);
+    } catch (err) {
+      setEvents([]);
+      toast.error(String(err));
+    }
   };
 
-  const columns: Column<SyncRun>[] = [
+  const loadTasks = async (run: SyncRun, offset: number) => {
+    setTaskError("");
+    try {
+      const page = await get<SyncTaskPage>(
+        `/api/sync/${run.id}/tasks?offset=${offset}&limit=${TASK_PAGE_SIZE}`,
+      );
+      setTasks(page);
+    } catch (err) {
+      setTaskError(String(err));
+    }
+  };
+
+  const openTasks = (run: SyncRun) => {
+    setSelected(run);
+    void loadTasks(run, 0);
+  };
+
+  const controlRun = async (run: SyncRun, action: "pause" | "resume", okMsg: string) => {
+    try {
+      await post(`/api/sync/${run.id}/${action}`);
+      toast.success(okMsg);
+      reload();
+      if (selected?.id === run.id) {
+        void loadTasks(run, tasks?.offset ?? 0);
+        void openRun(run);
+      }
+    } catch (err) {
+      toast.error(String(err));
+    }
+  };
+
+  const runColumns: Column<SyncRun>[] = [
     { key: "id", label: "run_id", render: (r) => <Mono>{r.id}</Mono> },
     { key: "source", label: "source_id", render: (r) => <Mono>{r.source_id}</Mono> },
     { key: "status", label: "status", render: (r) => <Status status={r.status} /> },
+    {
+      key: "progress",
+      label: "进度",
+      render: (r) => (
+        <>
+          <Mono>{r.progress.toFixed(1)}%</Mono>
+          <span className="ml-1 text-xs text-muted-foreground">{r.current_stage}</span>
+        </>
+      ),
+    },
+    {
+      key: "files",
+      label: "文件",
+      render: (r) => (
+        <Mono>
+          {r.done_files}/{r.failed_files}/{r.total_files}
+        </Mono>
+      ),
+    },
     { key: "started", label: "started_at", render: (r) => <Mono>{fmtTime(r.started_at)}</Mono> },
-    { key: "finished", label: "finished_at", render: (r) => <Mono>{fmtTime(r.finished_at)}</Mono> },
+    {
+      key: "finished",
+      label: "finished_at",
+      render: (r) => <Mono>{fmtTime(r.finished_at)}</Mono>,
+    },
     {
       key: "ops",
       label: "",
       render: (r) => (
-        <Button size="sm" variant="outline" onClick={() => void openRun(r)}>
-          事件
-        </Button>
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => openTasks(r)}>
+            任务
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => void openRun(r)}>
+            事件
+          </Button>
+          {r.status === "running" && (
+            <Button size="sm" variant="outline" onClick={() => void controlRun(r, "pause", "已暂停")}>
+              暂停
+            </Button>
+          )}
+          {r.status === "paused" && (
+            <Button size="sm" variant="outline" onClick={() => void controlRun(r, "resume", "已继续")}>
+              继续
+            </Button>
+          )}
+        </span>
       ),
+    },
+  ];
+
+  const taskColumns: Column<SyncTask>[] = [
+    { key: "name", label: "文件", render: (t) => <Mono>{t.name}</Mono> },
+    { key: "status", label: "状态", render: (t) => <Status status={t.status} /> },
+    {
+      key: "bytes",
+      label: "下载",
+      render: (t) =>
+        t.total_bytes > 0 ? (
+          <Mono>
+            {fmtBytes(t.bytes_downloaded)}/{fmtBytes(t.total_bytes)}
+            {t.fraction != null ? ` (${Math.round(t.fraction * 100)}%)` : ""}
+          </Mono>
+        ) : (
+          "-"
+        ),
+    },
+    {
+      key: "attempts",
+      label: "尝试(下载/处理)",
+      render: (t) => <Mono>{t.attempts}/{t.process_attempts}</Mono>,
+    },
+    {
+      key: "error",
+      label: "错误",
+      render: (t) =>
+        t.error ? (
+          <span className="text-xs text-destructive" title={t.error}>
+            {t.error.length > 60 ? `${t.error.slice(0, 60)}…` : t.error}
+          </span>
+        ) : (
+          "-"
+        ),
     },
   ];
 
@@ -672,7 +872,7 @@ function SyncRunsTab() {
     <>
       <ErrorNote message={error} />
       <DataTable
-        columns={columns}
+        columns={runColumns}
         rows={data ?? []}
         toolbar={
           <Button variant="outline" onClick={reload}>
@@ -681,12 +881,85 @@ function SyncRunsTab() {
         }
       />
       {selected && (
-        <PageSection eyebrow={`SYNC · ${selected.id}`} title="事件流">
-          {events.length === 0 ? (
-            <JsonBlock value="（暂无事件）" />
-          ) : (
-            <JsonBlock value={events} />
-          )}
+        <PageSection eyebrow={`SYNC · ${selected.id}`} title="批次任务管理">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Status status={selected.status} />
+            <Mono>{selected.progress.toFixed(1)}%</Mono>
+            <span className="text-xs text-muted-foreground">
+              阶段 {selected.current_stage || "-"} · 完成 {selected.done_files}/{selected.total_files}
+              失败 {selected.failed_files}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void loadTasks(selected, tasks?.offset ?? 0)}
+            >
+              刷新
+            </Button>
+            {selected.status === "running" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void controlRun(selected, "pause", "已暂停")}
+              >
+                暂停
+              </Button>
+            )}
+            {selected.status === "paused" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void controlRun(selected, "resume", "已继续")}
+              >
+                继续
+              </Button>
+            )}
+          </div>
+          <ErrorNote message={taskError} />
+          <DataTable
+            columns={taskColumns}
+            rows={tasks?.items ?? []}
+            footer={
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!tasks || tasks.offset <= 0}
+                  onClick={() => void loadTasks(selected, 0)}
+                >
+                  首页
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!tasks || tasks.offset <= 0}
+                  onClick={() => void loadTasks(selected, Math.max(0, (tasks?.offset ?? 0) - TASK_PAGE_SIZE))}
+                >
+                  上一页
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!tasks || tasks.offset + tasks.items.length >= tasks.total}
+                  onClick={() => void loadTasks(selected, (tasks?.offset ?? 0) + TASK_PAGE_SIZE)}
+                >
+                  下一页
+                </Button>
+                {tasks && (
+                  <span className="ml-2 font-mono text-xs text-muted-foreground">
+                    共 {tasks.total} 个文件任务 · 第 {tasks.offset / TASK_PAGE_SIZE + 1} 页
+                  </span>
+                )}
+              </div>
+            }
+          />
+          <PageSection eyebrow={`SYNC · ${selected.id}`} title="事件流">
+            {events.length === 0 ? (
+              <JsonBlock value="（暂无事件）" />
+            ) : (
+              <JsonBlock value={events} />
+            )}
+          </PageSection>
         </PageSection>
       )}
     </>
@@ -696,21 +969,31 @@ function SyncRunsTab() {
 // ---- downloads ---------------------------------------------------------------
 
 interface Download {
-  asset_name: string;
+  asset_name: string | null;
+  asset_id: string;
   status: string;
-  sha256: string;
-  bytes_downloaded: number;
+  sha256: string | null;
+  bytes_downloaded: number | null;
   error: string | null;
+  downloader: string;
+  attempts: number;
+  started_at: string;
 }
 
 function DownloadsTab() {
   const { data, error, reload } = useFetch<Download[]>("/api/downloads?limit=50");
 
   const columns: Column<Download>[] = [
-    { key: "asset", label: "asset", render: (d) => <Mono>{d.asset_name}</Mono> },
+    {
+      key: "asset",
+      label: "asset",
+      render: (d) => <Mono>{d.asset_name || d.asset_id}</Mono>,
+    },
     { key: "status", label: "status", render: (d) => <Status status={d.status} /> },
     { key: "bytes", label: "bytes", render: (d) => fmtBytes(d.bytes_downloaded) },
-    { key: "sha", label: "sha256", render: (d) => <Mono>{d.sha256.slice(0, 12)}</Mono> },
+    { key: "sha", label: "sha256", render: (d) => <Mono>{d.sha256?.slice(0, 12) ?? "-"}</Mono> },
+    { key: "downloader", label: "downloader", render: (d) => <Mono>{d.downloader}</Mono> },
+    { key: "attempts", label: "attempts", render: (d) => <Mono>{d.attempts}</Mono> },
     { key: "error", label: "error", render: (d) => d.error || "-" },
   ];
 

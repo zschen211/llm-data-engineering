@@ -1,0 +1,48 @@
+# process-exporter config: group host processes by name for per-process
+# CPU/memory panels in Grafana.
+# Matching semantics (see ncabatoff/process-exporter README):
+#   - comm/exe: exact string match, list is an OR (regex "~" prefixes are
+#     NOT supported by this version)
+#   - cmdline: Go regexp applied to argv, ALL must match
+# Metrics: namedprocess_namegroup_{cpu_seconds_total, memory_bytes,
+# num_procs, threads, open_filedesc}. Scraped by Prometheus at :9256
+# (see infra/docs/contract.md).
+process_names:
+  - name: "uvicorn"
+    comm:
+      - uvicorn
+  - name: "raylet"
+    comm:
+      - raylet
+  - name: "gcs-server"
+    comm:
+      - gcs_server
+  - name: "ray-worker"
+    cmdline:
+      - "ray::"
+  - name: "node-vite"
+    cmdline:
+      - "vite"
+  - name: "python"
+    comm:
+      - python
+      - python3
+  - name: "rustfs"
+    comm:
+      - rustfs
+  - name: "node"
+    comm:
+      - node
+      - nodejs
+  - name: "prometheus"
+    comm:
+      - prometheus
+  - name: "grafana"
+    comm:
+      - grafana
+  - name: "node-exporter"
+    comm:
+      - node_exporter
+  - name: "redis-server"
+    comm:
+      - redis-server

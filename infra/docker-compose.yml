@@ -95,6 +95,21 @@ services:
     network_mode: host
     restart: unless-stopped
 
+  # Per-process CPU/memory of the host (uvicorn / ray / rustfs / obs stack).
+  # Groups by process name per infra/process-exporter/process-exporter.yml;
+  # scraped by Prometheus at :9256 (see infra/docs/contract.md).
+  process-exporter:
+    image: ${PROCESS_EXPORTER_IMAGE:-hub.rat.dev/ncabatoff/process-exporter:latest}
+    container_name: obs-process-exporter
+    network_mode: host
+    command:
+      - -config.path=/etc/process-exporter/process-exporter.yml
+      - -procfs=/host/proc
+    volumes:
+      - ./process-exporter/process-exporter.yml:/etc/process-exporter/process-exporter.yml:ro
+      - /proc:/host/proc:ro
+    restart: unless-stopped
+
 volumes:
   rustfs_data_0:
   rustfs_data_1:

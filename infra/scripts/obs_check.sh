@@ -7,7 +7,7 @@ docker compose config -q
 
 # Wait for Prometheus, then check every scrape target is up.
 targets=$(curl -fsS http://localhost:9090/api/v1/targets)
-for job in asset data-factory ray-metrics node-exporter; do
+for job in asset data-factory ray-metrics node-exporter process-exporter; do
   if ! echo "$targets" | grep -q "\"job\":\"$job\"\|\"job\": \"$job\""; then
     echo "error: no scrape target for job $job" >&2
     exit 1
@@ -24,6 +24,6 @@ echo "asset /metrics: ok"
 
 # data-factory self metrics (HTTP counters).
 df_metrics=$(curl -fsS http://localhost:8001/metrics)
-echo "$df_metrics" | grep -q "^asset_http_requests_total " || {
+echo "$df_metrics" | grep -q "^asset_http_requests_total" || {
   echo "error: missing asset_http_requests_total on data-factory" >&2; exit 1; }
 echo "data-factory /metrics: ok"

@@ -95,10 +95,11 @@ uv run bandit -r src -q
   extend this exception to other code and do not introduce new occurrences
   without explicit approval.
 - **Ray cluster:** services attach the shared cluster via `RAY_ADDRESS`
-  (infra contract); when unset they start an embedded local cluster as a dev
-  fallback (loud warning). Tests always use a session-scoped embedded cluster
-  and never touch the shared one. `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` is forced
-  by both packages at import (uv-run path-dependency packaging guard).
+  (infra contract) and raise a clear error when it is unset — there is no
+  embedded fallback (one process, one cluster). Tests always use a
+  session-scoped embedded cluster (`address="local"`), never the shared one.
+  `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` is forced by both packages at import
+  (uv-run path-dependency packaging guard).
 
 ## Conventions
 

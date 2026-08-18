@@ -20,6 +20,10 @@ LOG_DIR="$RUN_DIR/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
 RAY_ADDRESS="${RAY_ADDRESS:-127.0.0.1:26379}"
+# Exported up front so EVERY subcommand (up / restart <svc> / ...) hands the
+# shared-cluster address to the backends — an unset RAY_ADDRESS would make
+# the services fail or (previously) spawn a duplicate embedded cluster.
+export RAY_ADDRESS
 RAY_BIN="$(command -v ray || echo "$ROOT/asset/.venv/bin/ray")"
 APP_SERVICES=(asset data_factory frontend)
 APP_PORTS=(8000 8001 5173)
@@ -113,7 +117,6 @@ cmd_up() {
   echo "[infra] ray cluster"
   export PATH="$(dirname "$RAY_BIN"):$PATH"
   (cd infra && ./scripts/ray-start.sh)
-  export RAY_ADDRESS
   _wait_http "http://localhost:9000/health" "rustfs" "infra"
   echo "[apps ] backends + frontend"
   _launch asset

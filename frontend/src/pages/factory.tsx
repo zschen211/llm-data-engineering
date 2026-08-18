@@ -13,11 +13,11 @@ import {
   FieldItem,
   fmtTime,
   FormModal,
+  InfoCard,
   JsonBlock,
   Modal,
   Mono,
   PageContainer,
-  StatCard,
   Status,
   Table,
   useFetch,
@@ -144,31 +144,21 @@ function FactoryOverviewPage() {
     >
       <ErrorNote message={error} />
       {data && (
-        <>
-          <div className="mb-5 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-            <StatCard label="capabilities" value={data.capability_count} />
-            <StatCard label="strategies" value={data.strategy_count} />
-            <StatCard label="workflows" value={data.workflow_count} />
-            <StatCard label="runs" value={data.run_count} />
-            <StatCard label="models" value={data.model_count} />
-            <StatCard label="eval runs" value={data.eval_run_count} />
-            <StatCard label="reports" value={data.report_count} />
-          </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
-            <FieldItem label="backend">
-              <Mono>{data.backend}</Mono>
-            </FieldItem>
-            <FieldItem label="bucket">
-              <Mono>{data.bucket ?? "-"}</Mono>
-            </FieldItem>
-            <FieldItem label="data_dir">
-              <Mono>{data.data_dir}</Mono>
-            </FieldItem>
-            <FieldItem label="models_dir">
-              <Mono>{data.models_dir}</Mono>
-            </FieldItem>
-          </div>
-        </>
+        <InfoCard
+          items={[
+            ["capabilities", data.capability_count],
+            ["strategies", data.strategy_count],
+            ["workflows", data.workflow_count],
+            ["runs", data.run_count],
+            ["models", data.model_count],
+            ["eval runs", data.eval_run_count],
+            ["reports", data.report_count],
+            ["backend", <Mono key="b">{data.backend}</Mono>],
+            ["bucket", <Mono key="bk">{data.bucket ?? "-"}</Mono>],
+            ["data_dir", <Mono key="dd">{data.data_dir}</Mono>],
+            ["models_dir", <Mono key="md">{data.models_dir}</Mono>],
+          ]}
+        />
       )}
     </PageContainer>
   );
@@ -530,7 +520,7 @@ function RunsPage() {
   return (
     <PageContainer
       desc="工作流 × 输入数据集的一次执行；Ray Data 链式跑，断点可续。"
-      actions={<Button onClick={() => setCreating(true)}>新建 run</Button>}
+      actions={<Button onClick={() => setCreating(true)}>新建运行</Button>}
     >
       <ErrorNote message={error} />
       <DataTable columns={columns} rows={data ?? []} />
@@ -671,7 +661,7 @@ function ModelsPage() {
             variant="outline"
             onClick={() => void runAction(() => post(`/api/models/${m.id}/check`), "心跳已刷新")}
           >
-            check
+            检查
           </Button>
           <Button
             size="sm"
@@ -993,7 +983,7 @@ function ReportsPage() {
                     .catch((err: unknown) => setPayload({ error: String(err) }))
                 }
               >
-                payload
+                查看详情
               </Button>
             ),
           },

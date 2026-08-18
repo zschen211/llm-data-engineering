@@ -15,9 +15,10 @@ def _make_store(tmp_path) -> AssetStore:
 
 
 def test_manager_owns_what_it_starts():
-    """A manager that initializes the cluster owns it and shuts it down."""
+    """A manager with an explicit local address starts its own cluster and
+    shuts it down (the app itself never starts clusters — attach only)."""
     preexisting = ray.is_initialized()
-    manager = ClusterManager(num_cpus=2)
+    manager = ClusterManager(address="local", num_cpus=2)
     manager.ensure_started()
     try:
         assert ray.is_initialized()
@@ -53,12 +54,30 @@ def test_env_configuration(monkeypatch):
     monkeypatch.setenv("RAY_ADDRESS", "ray://example:10001")
     manager = ClusterManager()
     assert manager._num_cpus == 3
-    assert manager._address == "ray://example:10001"
+    assert manager._address == ""
 
 
-def test_lifespan_bounds_cluster_lifetime(tmp_path):
-    """The web app owns the cluster for its lifespan: started on startup,
-    shut down on shutdown (unless someone else already owns it)."""
+def test_manager_requires_address(monkeypatch):
+    """No embedded fallback: without RAY_ADDRESS and with no cluster up the
+    manager refuses to start anything."""
+    monkeypatch.delenv("RAY_ADDRESS", raising=False)
+    manager = ClusterManager()
+    if ray.is_initialized():
+        manager.ensure_started()  # no-op, cluster already up
+        return
+    try:
+        manager.ensure_started()
+    except ValueError as exc:
+        assert "RAY_ADDRESS" in str(exc)
+    else:
+        raise AssertionError("expected ValueError without RAY_ADDRESS")
+
+
+def test_lifespan_bounds_cluster_lifetime(tmp_path, monkeypatch):
+    """The web app attaches for its lifespan: started on startup, shut down
+    on shutdown (unless someone else already owns it). The app only ever
+    attaches — "local" here stands in for the shared cluster address."""
+    monkeypatch.setenv("RAY_ADDRESS", "local")
     preexisting = ray.is_initialized()
     store = _make_store(tmp_path)
     with TestClient(create_app(store)) as client:

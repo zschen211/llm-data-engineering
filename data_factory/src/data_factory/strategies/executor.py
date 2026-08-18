@@ -39,19 +39,18 @@ OUT_FILENAME = "out.jsonl"
 
 def ensure_ray() -> None:
     """Attach to the shared Ray cluster (infra contract: ``RAY_ADDRESS``);
-    fall back to an embedded local cluster for dev when it is unset."""
+    raises when it is unset (the embedded local fallback was removed — one
+    process, one cluster)."""
     if ray.is_initialized():
         return
     address = os.environ.get("RAY_ADDRESS", "").strip()
-    if address:
-        ray.init(address=address, ignore_reinit_error=True, log_to_driver=False)
-        return
-    logger.warning(
-        "no RAY_ADDRESS set — starting an EMBEDDED local Ray cluster (dev "
-        "only); start infra/scripts/ray-start.sh and export RAY_ADDRESS to "
-        "use the shared cluster"
-    )
-    ray.init(ignore_reinit_error=True, log_to_driver=False)
+    if not address:
+        raise ValueError(
+            "RAY_ADDRESS is not set — the shared Ray cluster is required "
+            "(infra/scripts/ray-start.sh + export RAY_ADDRESS); the embedded "
+            "local fallback was removed"
+        )
+    ray.init(address=address, ignore_reinit_error=True, log_to_driver=False)
 
 
 class PipelineExecutor:

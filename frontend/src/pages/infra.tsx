@@ -5,11 +5,10 @@
 import { Button } from "@/components/ui/button";
 import {
   ErrorNote,
-  FieldItem,
+  InfoCard,
   Mono,
   PageContainer,
   PageSection,
-  StatCard,
   useFetch,
 } from "../widgets";
 
@@ -48,38 +47,30 @@ function InfraOverviewPage() {
     >
       <ErrorNote message={error} />
       {data && (
-        <>
-          <div className="mb-5 grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3">
-            <StatCard label="ray" value={data.initialized ? "initialized" : "down"} />
-            <StatCard label="nodes" value={data.alive_nodes} />
-            <StatCard
-              label="cpus (available/total)"
-              value={
-                <span className="text-sm">
-                  {data.available_cpus}/{data.total_cpus}
-                </span>
-              }
-            />
-            <StatCard label="running tasks" value={data.running_tasks} />
-            <StatCard label="alive actors" value={data.alive_actors} />
-          </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2.5">
-            <FieldItem label="address">
-              <Mono>{data.address}</Mono>
-            </FieldItem>
-            <FieldItem label="dashboard">
-              <a href={data.dashboard_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+        <InfoCard
+          items={[
+            ["ray", data.initialized ? "initialized" : "down"],
+            ["nodes", data.alive_nodes],
+            ["cpus", `${data.available_cpus}/${data.total_cpus}`],
+            ["running tasks", data.running_tasks],
+            ["alive actors", data.alive_actors],
+            ["address", <Mono key="a">{data.address}</Mono>],
+            [
+              "dashboard",
+              <a
+                key="d"
+                href={data.dashboard_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary hover:underline"
+              >
                 {data.dashboard_url}
-              </a>
-            </FieldItem>
-            <FieldItem label="metrics_port">
-              <Mono>{data.metrics_port}</Mono>
-            </FieldItem>
-            <FieldItem label="logs_dir">
-              <Mono>{data.logs_dir}</Mono>
-            </FieldItem>
-          </div>
-        </>
+              </a>,
+            ],
+            ["metrics_port", <Mono key="m">{data.metrics_port}</Mono>],
+            ["logs_dir", <Mono key="l">{data.logs_dir}</Mono>],
+          ]}
+        />
       )}
       <PageSection eyebrow="MIDDLEWARE" title="中间件控制台">
         <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">

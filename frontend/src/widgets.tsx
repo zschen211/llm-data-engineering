@@ -100,7 +100,7 @@ export type StatusTone = "ok" | "warn" | "danger" | "muted";
 
 export function statusTone(status: string): StatusTone {
   const s = String(status).toLowerCase();
-  if (["ready", "succeeded", "done", "completed", "persisted", "uploaded", "new"].includes(s)) {
+  if (["ready", "succeeded", "done", "completed", "persisted", "uploaded", "downloaded", "new"].includes(s)) {
     return "ok";
   }
   if (["running", "syncing", "downloading", "pending", "queued"].includes(s)) {
@@ -264,17 +264,6 @@ export function FormModal({
 
 // ---- overview blocks -------------------------------------------------------
 
-export function StatCard({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="rounded-md border bg-card p-3.5">
-      <div className="font-mono text-xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1 font-mono text-xl font-semibold">{value}</div>
-    </div>
-  );
-}
-
 export function FieldItem({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="rounded-md border bg-card px-3 py-2">
@@ -282,6 +271,21 @@ export function FieldItem({ label, children }: { label: string; children: ReactN
         {label}
       </span>
       {children}
+    </div>
+  );
+}
+
+export function InfoCard({ items }: { items: Array<[string, ReactNode]> }) {
+  return (
+    <div className="divide-y rounded-md border bg-card">
+      {items.map(([label, value]) => (
+        <div key={label} className="flex items-center gap-4 px-3.5 py-2">
+          <span className="w-32 shrink-0 font-mono text-xs uppercase tracking-wider text-muted-foreground">
+            {label}
+          </span>
+          <div className="min-w-0 flex-1 break-all font-mono text-sm">{value}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -296,6 +300,9 @@ export function Field({
   kind = "text",
   options,
   mono,
+  required,
+  hint,
+  type = "text",
 }: {
   label: string;
   value: string;
@@ -304,12 +311,22 @@ export function Field({
   kind?: "text" | "select" | "textarea";
   options?: string[];
   mono?: boolean;
+  required?: boolean;
+  hint?: string;
+  type?: "text" | "number";
 }) {
   const labelCls = "font-mono text-xs tracking-wider text-muted-foreground";
+  const labelNode = (
+    <Label className={labelCls}>
+      {label}
+      {required && <span className="ml-1 text-destructive">*</span>}
+    </Label>
+  );
+  const hintNode = hint && <p className="text-xs text-muted-foreground">{hint}</p>;
   if (kind === "select") {
     return (
       <div className="flex flex-col gap-1.5">
-        <Label className={labelCls}>{label}</Label>
+        {labelNode}
         <Select value={value || undefined} onValueChange={onChange}>
           <SelectTrigger className="w-fit min-w-40">
             <SelectValue placeholder={placeholder ?? "（选择）"} />
@@ -322,13 +339,14 @@ export function Field({
             ))}
           </SelectContent>
         </Select>
+        {hintNode}
       </div>
     );
   }
   if (kind === "textarea") {
     return (
       <div className="flex flex-col gap-1.5">
-        <Label className={labelCls}>{label}</Label>
+        {labelNode}
         <Textarea
           rows={4}
           value={value}
@@ -336,19 +354,21 @@ export function Field({
           onChange={(e) => onChange(e.target.value)}
           className={mono ? "font-mono text-xs" : "font-sans text-sm"}
         />
+        {hintNode}
       </div>
     );
   }
   return (
     <div className="flex flex-col gap-1.5">
-      <Label className={labelCls}>{label}</Label>
+      {labelNode}
       <Input
-        type="text"
+        type={type}
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
         className={cn("h-9", mono ? "font-mono text-xs" : "font-sans text-sm")}
       />
+      {hintNode}
     </div>
   );
 }
